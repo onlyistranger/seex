@@ -185,6 +185,7 @@ fn build_batch_options(req: &ExportRequest, input_path: &PathBuf) -> BatchOption
         parallel: req.parallel.max(1),
         continue_on_error: req.continue_on_error,
         force: req.force,
+        lcsc_english: false,
     }
 }
 
