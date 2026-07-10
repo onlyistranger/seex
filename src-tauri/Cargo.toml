@@ -23,7 +23,7 @@ arboard = "3.6.1"
 clipboard-master = "4.0.0"
 chrono = "0.4.44"
 regex = "1.12.3"
-npnp = { git = "https://github.com", version = "0.1.6" }
+npnp = { git = "https://github.com/onlyistranger/npnp", version = "0.1.6" }
 tokio = { version = "1.52.1", features = ["rt", "sync"] }
 ratatui = "0.30.0"
 crossterm = "0.29.0"
