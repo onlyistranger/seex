@@ -55,6 +55,9 @@ pub struct AppState {
 pub struct ManagedApp {
     pub controller: AppController,
 }
+// 2. 在结构体定义下方，手动显式实现 Send 和 Sync
+unsafe impl Send for ManagedApp {}
+unsafe impl Sync for ManagedApp {}
 
 fn build_app_state(controller: &AppController) -> AppState {
     let defaults = AppConfig::default();
