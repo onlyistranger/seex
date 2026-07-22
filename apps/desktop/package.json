@@ -8,7 +8,11 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:build:dmg": "tauri build --target aarch64-apple-darwin --bundles dmg"
+    "tauri:build:dmg": "tauri build --target aarch64-apple-darwin --bundles dmg",
+    "lint": "oxlint . --max-warnings=5",
+    "lint:fix": "oxlint . --fix",
+    "format": "prettier --write \"src/**/*.{ts,css}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,css}\""
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
@@ -21,6 +25,8 @@
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",
     "@types/three": "^0.185.1",
+    "oxlint": "^1.75.0",
+    "prettier": "^3.9.6",
     "typescript": "^7.0.2",
     "vite": "^8.1.5"
   }

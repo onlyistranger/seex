@@ -1,0 +1,66 @@
+name: Bug 报告
+description: 报告 HappyJLC 的故障或异常行为
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量附上操作系统、复现步骤和相关日志，便于定位问题。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么？
+      description: 描述你遇到的问题，以及你原本期待的结果。
+      placeholder: "例如：监听剪贴板后点击导出，3D 模型没有生成。"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 让我们能够按步骤复现该问题。
+      placeholder: |
+        1. 启动桌面端
+        2. 复制 LCSC 编号 C2040 到剪贴板
+        3. 点击「导出」
+        4. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: 受影响的组件
+      options:
+        - 桌面端 (Tauri)
+        - CLI (happyjlc-cli)
+        - 转换核心 (happyjlc-core)
+        - 库存 / BOM
+        - 其它
+    validations:
+      required: true
+  - type: input
+    id: lcsc-id
+    attributes:
+      label: 相关 LCSC 编号（可选）
+      placeholder: "C2040"
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: "macOS 15.2 arm64 / Windows 11 / Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: HappyJLC 版本
+      description: 见「关于」页面或 `happyjlc --version` 输出。
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
+      description: 把相关日志粘贴在这里（终端输出或 `~/Library/Application Support/com.happyjlc.desktop/logs/`）。截图也可以直接拖进来。
+      render: shell

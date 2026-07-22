@@ -1,0 +1,36 @@
+name: 功能建议
+description: 提出新功能或工作流改进的想法
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决什么问题？
+      description: 你正在做的硬件工作里，哪个环节让你觉得费时或重复？
+      placeholder: "例如：每次导出后都要手动整理 .pretty 目录，希望桌面端能按类别自动归档。"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: 你想象中的样子
+      description: 简单描述你期待的交互或结果。不必写实现细节。
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: 影响范围
+      options:
+        - 桌面端 (Tauri)
+        - CLI (happyjlc-cli)
+        - 转换核心 (happyjlc-core)
+        - 库存 / BOM
+        - 其它
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 现在的替代办法
+      description: 在 HappyJLC 还没有这个功能之前，你目前是怎么绕过的？

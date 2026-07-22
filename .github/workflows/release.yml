@@ -124,7 +124,7 @@ jobs:
           files: artifacts/**
           name: HappyJLC ${{ github.ref_name }}
           generate_release_notes: true
-          draft: false
+          draft: true
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
