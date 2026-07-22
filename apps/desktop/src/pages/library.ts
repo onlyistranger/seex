@@ -12,6 +12,7 @@ import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
 import { renderSignature } from "../patched-render";
 import { toast } from "../ui/toast";
+import { validateLcscId, validateRequiredPath } from "../validation";
 import {
   closeImportedPreview,
   closeImportedStandalonePreview,
@@ -90,10 +91,6 @@ export function librarySourceLabel(kind: string): string {
       } as Record<string, string>
     )[kind] ?? kind
   );
-}
-
-function normalizeImportedLcscPart(value: string): string {
-  return value.trim().toUpperCase();
 }
 
 function dedupeImportedParts(items: ImportedSymbol[]): string[] {
@@ -210,6 +207,11 @@ function showImportedResult(message: string, kind?: ExportMessageKind): void {
   toast[resolvedKind](message);
 }
 
+function importedPartsPathIsValid(): boolean {
+  return validateRequiredPath(($("imported-parts-save-path-input") as HTMLInputElement).value)
+    .valid;
+}
+
 function renderImportedList(items: ImportedSymbol[]): void {
   closeImportedPreview();
   const copyLabel = t("monitor.copy");
@@ -292,6 +294,7 @@ function renderImportedPanel(): void {
   const saveEditButton = $("btn-save-imported-edit") as HTMLButtonElement;
   const editSymbolInput = $("imported-edit-symbol-name-input") as HTMLInputElement;
   const editLcscInput = $("imported-edit-lcsc-part-input") as HTMLInputElement;
+  const editLcscFeedback = $("imported-edit-lcsc-part-feedback");
   const cancelEditButtons = [
     $("btn-cancel-imported-edit") as HTMLButtonElement,
     $("btn-cancel-imported-edit-secondary") as HTMLButtonElement,
@@ -318,14 +321,15 @@ function renderImportedPanel(): void {
   sourceFilter.value = importedUi.sourceFilter;
   refreshButton.disabled = controlsDisabled;
   browseButton.disabled = controlsDisabled;
-  applyButton.disabled = controlsDisabled;
+  applyButton.disabled = controlsDisabled || !importedPartsPathIsValid();
   importButton.disabled = controlsDisabled;
   exportButton.disabled = controlsDisabled || activeParts.length === 0;
   copyButton.disabled = controlsDisabled || activeParts.length === 0;
   queueButton.disabled = controlsDisabled || activeParts.length === 0;
   selectVisibleButton.disabled = controlsDisabled || filteredItems.length === 0;
   clearSelectionButton.disabled = controlsDisabled || importedUi.selectedKeys.size === 0;
-  saveEditButton.disabled = controlsDisabled || !editingItem;
+  const editLcscValidation = validateLcscId(importedUi.editDraftLcscPart);
+  saveEditButton.disabled = controlsDisabled || !editingItem || !editLcscValidation.valid;
   editSymbolInput.disabled = controlsDisabled || !editingItem;
   editLcscInput.disabled = controlsDisabled || !editingItem;
   cancelEditButtons.forEach((button) => {
@@ -353,11 +357,17 @@ function renderImportedPanel(): void {
     syncImportedDraftInput("imported-edit-symbol-name-input", importedUi.editDraftSymbolName);
     syncImportedDraftInput("imported-edit-lcsc-part-input", importedUi.editDraftLcscPart);
     $("imported-editor-source-file").textContent = importedUi.editDraftSourceFile;
+    editLcscFeedback.textContent = editLcscValidation.valid ? "" : t("validation.invalidLcscId");
+    editLcscFeedback.className = editLcscValidation.valid
+      ? "field-feedback hidden"
+      : "field-feedback";
   } else {
     editorCard.classList.add("hidden");
     syncImportedDraftInput("imported-edit-symbol-name-input", "");
     syncImportedDraftInput("imported-edit-lcsc-part-input", "");
     $("imported-editor-source-file").textContent = "";
+    editLcscFeedback.textContent = "";
+    editLcscFeedback.className = "field-feedback hidden";
   }
 
   if (importedUi.notice) {
@@ -474,6 +484,7 @@ async function saveActiveImportedParts(): Promise<void> {
 
   const context = pageContext;
   if (!context) return;
+  if (!importedPartsPathIsValid()) return;
   const path = ($("imported-parts-save-path-input") as HTMLInputElement).value;
   await context.queueConfigWrite(async () => {
     await invoke("set_imported_parts_save_path", { path });
@@ -504,7 +515,12 @@ async function saveImportedEdit(): Promise<void> {
   }
 
   const newSymbolName = importedUi.editDraftSymbolName.trim();
-  const newLcscPart = normalizeImportedLcscPart(importedUi.editDraftLcscPart);
+  const lcscValidation = validateLcscId(importedUi.editDraftLcscPart);
+  if (!lcscValidation.valid || !lcscValidation.normalized) {
+    renderImportedPanel();
+    return;
+  }
+  const newLcscPart = lcscValidation.normalized;
   const result = await invoke<string>("update_imported_symbol", {
     request: {
       source_file: item.source_file,
@@ -677,10 +693,8 @@ export function mount(nextContext: LibraryPageContext): void {
   });
 
   $("imported-edit-lcsc-part-input").addEventListener("input", (event) => {
-    importedUi.editDraftLcscPart = normalizeImportedLcscPart(
-      (event.target as HTMLInputElement).value,
-    );
-    (event.target as HTMLInputElement).value = importedUi.editDraftLcscPart;
+    importedUi.editDraftLcscPart = (event.target as HTMLInputElement).value;
+    renderImportedPanel();
   });
 
   const cancelImportedEdit = (): void => {
@@ -727,6 +741,7 @@ export function mount(nextContext: LibraryPageContext): void {
 
   $("btn-apply-imported-parts-save-path").addEventListener("click", async () => {
     if (importedUi.loading || importedUi.busy) return;
+    if (!importedPartsPathIsValid()) return;
     importedUi.notice = null;
     const path = ($("imported-parts-save-path-input") as HTMLInputElement).value;
     await nextContext.queueConfigWrite(async () => {
@@ -769,6 +784,7 @@ export function mount(nextContext: LibraryPageContext): void {
 
       try {
         const path = ($("imported-parts-save-path-input") as HTMLInputElement).value;
+        if (!validateRequiredPath(path).valid) return;
         await nextContext.queueConfigWrite(async () => {
           await invoke("set_imported_parts_save_path", { path });
           await nextContext.refresh();

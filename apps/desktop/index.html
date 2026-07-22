@@ -247,6 +247,7 @@
                 <div class="imported-control">
                   <label class="hint" data-i18n="imported.editorLcscPart">LCSC Part:</label>
                   <input type="text" id="imported-edit-lcsc-part-input" />
+                  <div id="imported-edit-lcsc-part-feedback" class="field-feedback hidden"></div>
                 </div>
               </div>
               <div class="row imported-editor-actions">
@@ -378,7 +379,7 @@
                     <i class="panel-icon" data-lucide="settings-2"></i>
                   </div>
                   <label class="hint setting-label" data-i18n="export.exportDir">Export directory:</label>
-                  <div class="row setting-row"><input type="text" id="export-path-input" /><button class="btn-outline btn-sm" id="btn-browse-export-folder" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-export-path" data-i18n="export.apply">Apply</button></div>
+                  <div class="row setting-row"><input type="text" id="export-path-input" /><button class="btn-outline btn-sm" id="btn-browse-export-folder" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-export-path" data-i18n="export.apply">Apply</button></div><div id="export-path-feedback" class="field-feedback hidden"></div>
                   <div class="setting-inline"><button class="btn-outline btn-sm" id="btn-toggle-export-terminal" title="内嵌核心始终在后台运行，不会打开外部终端窗口" data-i18n="export.toggleTerminal">后台运行</button><span id="export-terminal-status" class="hint"></span></div>
                   <label class="hint setting-label" data-i18n="export.export3dPathMode">3D path mode:</label>
                   <div class="segmented-row"><button class="btn-pill btn-sm" id="btn-export-3d-mode-auto" title="根据导出目录自动判断路径" data-i18n="export.export3dModeAuto">自动</button><button class="btn-pill btn-sm" id="btn-export-3d-mode-project" title="按 KiCad 项目位置生成相对路径" data-i18n="export.export3dModeProject">KiCad 项目</button><button class="btn-pill btn-sm" id="btn-export-3d-mode-library" title="按元件库位置生成相对路径" data-i18n="export.export3dModeLibrary">库相对</button></div>
@@ -407,9 +408,9 @@
               <div class="settings-column">
                 <div class="panel settings-section">
                   <div class="panel-header compact"><div><h2>文件保存位置</h2></div><i class="panel-icon" data-lucide="folder-cog"></i></div>
-                  <div class="path-field"><label class="hint" data-i18n="monitor.historySavePath">Save History file:</label><div class="row"><input type="text" id="history-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-history-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-history-save-path" data-i18n="export.apply">Apply</button></div></div>
-                  <div class="path-field"><label class="hint" data-i18n="monitor.matchedSavePath">Export Matched file:</label><div class="row"><input type="text" id="matched-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-matched-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-matched-save-path" data-i18n="export.apply">Apply</button></div></div>
-                  <div class="path-field"><label class="hint" data-i18n="imported.exportFile">Parts file:</label><div class="row"><input type="text" id="imported-parts-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-imported-parts-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-imported-parts-save-path" data-i18n="export.apply">Apply</button></div></div>
+                  <div class="path-field"><label class="hint" data-i18n="monitor.historySavePath">Save History file:</label><div class="row"><input type="text" id="history-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-history-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-history-save-path" data-i18n="export.apply">Apply</button></div><div id="history-save-path-feedback" class="field-feedback hidden"></div></div>
+                  <div class="path-field"><label class="hint" data-i18n="monitor.matchedSavePath">Export Matched file:</label><div class="row"><input type="text" id="matched-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-matched-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-matched-save-path" data-i18n="export.apply">Apply</button></div><div id="matched-save-path-feedback" class="field-feedback hidden"></div></div>
+                  <div class="path-field"><label class="hint" data-i18n="imported.exportFile">Parts file:</label><div class="row"><input type="text" id="imported-parts-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-imported-parts-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-imported-parts-save-path" data-i18n="export.apply">Apply</button></div><div id="imported-parts-save-path-feedback" class="field-feedback hidden"></div></div>
                   <div class="hint setting-hint" data-i18n="monitor.savePathsExample">Example: C:\Users\xxx\Documents\history.txt</div>
                 </div>
               </div>

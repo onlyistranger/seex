@@ -10,6 +10,7 @@ import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
 import { tupleListChanged } from "../patched-render";
 import { toast } from "../ui/toast";
+import { validateRequiredPath } from "../validation";
 import type { AppState, ExportMessageKind } from "../types";
 import { $, applyTooltips, escapeAttr, escapeHtml, syncInputValue } from "../utils";
 
@@ -48,6 +49,20 @@ function classifySaveResult(message: string): ExportMessageKind {
 function showMonitorSaveResult(message: string, kind?: ExportMessageKind): void {
   const resolvedKind = kind ?? classifySaveResult(message);
   toast[resolvedKind](message);
+}
+
+function renderRequiredPathValidation(
+  inputId: string,
+  feedbackId: string,
+  buttonId: string,
+): boolean {
+  const result = validateRequiredPath(($(inputId) as HTMLInputElement).value);
+  const feedback = $(feedbackId);
+  const button = $(buttonId) as HTMLButtonElement;
+  button.disabled = !result.valid;
+  feedback.textContent = result.valid ? "" : t("validation.required");
+  feedback.className = result.valid ? "field-feedback hidden" : "field-feedback";
+  return result.valid;
 }
 
 function renderMatchedList(items: [string, string][]): void {
@@ -113,6 +128,16 @@ export function render(state: AppState): void {
 
   syncInputValue("history-save-path-input", state.history_save_path);
   syncInputValue("matched-save-path-input", state.matched_save_path);
+  renderRequiredPathValidation(
+    "history-save-path-input",
+    "history-save-path-feedback",
+    "btn-apply-history-save-path",
+  );
+  renderRequiredPathValidation(
+    "matched-save-path-input",
+    "matched-save-path-feedback",
+    "btn-apply-matched-save-path",
+  );
 
   const monitorButton = $("btn-toggle-monitor");
   monitorButton.classList.toggle("active", state.monitoring);
@@ -230,6 +255,14 @@ export function mount(nextContext: MonitorPageContext): void {
 
   $("btn-apply-history-save-path").addEventListener("click", async () => {
     const path = ($("history-save-path-input") as HTMLInputElement).value;
+    if (
+      !renderRequiredPathValidation(
+        "history-save-path-input",
+        "history-save-path-feedback",
+        "btn-apply-history-save-path",
+      )
+    )
+      return;
     await nextContext.queueConfigWrite(async () => {
       await invoke("set_history_save_path", { path });
       await nextContext.refresh();
@@ -254,6 +287,14 @@ export function mount(nextContext: MonitorPageContext): void {
 
   $("btn-apply-matched-save-path").addEventListener("click", async () => {
     const path = ($("matched-save-path-input") as HTMLInputElement).value;
+    if (
+      !renderRequiredPathValidation(
+        "matched-save-path-input",
+        "matched-save-path-feedback",
+        "btn-apply-matched-save-path",
+      )
+    )
+      return;
     await nextContext.queueConfigWrite(async () => {
       await invoke("set_matched_save_path", { path });
       await nextContext.refresh();
@@ -270,6 +311,21 @@ export function mount(nextContext: MonitorPageContext): void {
         await nextContext.refresh();
       });
     }
+  });
+
+  $("history-save-path-input").addEventListener("input", () => {
+    renderRequiredPathValidation(
+      "history-save-path-input",
+      "history-save-path-feedback",
+      "btn-apply-history-save-path",
+    );
+  });
+  $("matched-save-path-input").addEventListener("input", () => {
+    renderRequiredPathValidation(
+      "matched-save-path-input",
+      "matched-save-path-feedback",
+      "btn-apply-matched-save-path",
+    );
   });
 
   $("btn-clear-all").addEventListener("click", () => {

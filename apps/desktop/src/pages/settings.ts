@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { translate } from "../i18n";
 import type { ModelFormat } from "../model-preview";
 import { stateFieldsChanged } from "../patched-render";
+import { validateHexColor, validateRequiredPath } from "../validation";
 import type {
   AppState,
   Export3dPathMode,
@@ -15,13 +16,7 @@ import type {
   ExportField,
   ExportOverwriteField,
 } from "../types";
-import {
-  $,
-  parseOptionalHexColor,
-  parsePositiveIntOrFallback,
-  syncInputValue,
-  syncSelectValue,
-} from "../utils";
+import { $, parsePositiveIntOrFallback, syncInputValue, syncSelectValue } from "../utils";
 
 const t = translate;
 
@@ -134,15 +129,16 @@ function renderExportFillColorDraft(): void {
   const preview = $("export-symbol-fill-color-preview");
   const status = $("export-symbol-fill-color-status");
   const feedback = $("export-symbol-fill-color-feedback");
-  const parsed = parseOptionalHexColor(input.value);
+  const parsed = validateHexColor(input.value);
 
   if (!parsed.valid) {
     preview.classList.add("disabled");
     preview.setAttribute("aria-hidden", "true");
     preview.removeAttribute("style");
     status.textContent = t("export.exportFillColorAuto");
-    feedback.textContent = t("export.exportFillColorInvalid");
+    feedback.textContent = t("validation.invalidColor");
     feedback.className = "msg msg-error";
+    ($("btn-apply-export-symbol-fill-color") as HTMLButtonElement).disabled = true;
     return;
   }
 
@@ -159,6 +155,36 @@ function renderExportFillColorDraft(): void {
     preview.removeAttribute("style");
     status.textContent = t("export.exportFillColorAuto");
   }
+  ($("btn-apply-export-symbol-fill-color") as HTMLButtonElement).disabled = false;
+}
+
+function renderRequiredPathValidation(
+  inputId: string,
+  feedbackId: string,
+  buttonId: string,
+): boolean {
+  const result = validateRequiredPath(($(inputId) as HTMLInputElement).value);
+  const feedback = $(feedbackId);
+  const button = $(buttonId) as HTMLButtonElement;
+  button.disabled = !result.valid;
+  feedback.textContent = result.valid ? "" : t("validation.required");
+  feedback.className = result.valid ? "field-feedback hidden" : "field-feedback";
+  return result.valid;
+}
+
+function renderPathValidations(state: AppState): void {
+  if (state.export_output_path !== undefined) {
+    renderRequiredPathValidation(
+      "export-path-input",
+      "export-path-feedback",
+      "btn-apply-export-path",
+    );
+  }
+  renderRequiredPathValidation(
+    "imported-parts-save-path-input",
+    "imported-parts-save-path-feedback",
+    "btn-apply-imported-parts-save-path",
+  );
 }
 
 function syncOptionalExportState(state: AppState): void {
@@ -207,6 +233,7 @@ export function render(state: AppState): void {
     syncOptionalExportState(state);
     renderExport3dMode();
   }
+  renderPathValidations(state);
 }
 
 export async function syncExportInputs(): Promise<void> {
@@ -214,10 +241,12 @@ export async function syncExportInputs(): Promise<void> {
   const parallelValue = ($("export-parallel-input") as HTMLInputElement).value;
   const parallel = parsePositiveIntOrFallback(parallelValue, 4);
   const colorInput = ($("export-symbol-fill-color-input") as HTMLInputElement).value;
-  const parsedColor = parseOptionalHexColor(colorInput);
+  const parsedPath = validateRequiredPath(path);
+  const parsedColor = validateHexColor(colorInput);
 
+  if (!parsedPath.valid) throw new Error(t("validation.required"));
   if (!parsedColor.valid) {
-    throw new Error(t("export.exportFillColorInvalid"));
+    throw new Error(t("validation.invalidColor"));
   }
 
   await invoke("set_export_path", { path });
@@ -254,6 +283,14 @@ export function mount(nextContext: SettingsPageContext): void {
 
   $("btn-apply-export-path").addEventListener("click", async () => {
     const path = ($("export-path-input") as HTMLInputElement).value;
+    if (
+      !renderRequiredPathValidation(
+        "export-path-input",
+        "export-path-feedback",
+        "btn-apply-export-path",
+      )
+    )
+      return;
     await nextContext.queueConfigWrite(async () => {
       await invoke("set_export_path", { path });
       await nextContext.onExportPathChanged();
@@ -318,7 +355,7 @@ export function mount(nextContext: SettingsPageContext): void {
 
   $("btn-apply-export-symbol-fill-color").addEventListener("click", async () => {
     const input = $("export-symbol-fill-color-input") as HTMLInputElement;
-    const parsed = parseOptionalHexColor(input.value);
+    const parsed = validateHexColor(input.value);
     renderExportFillColorDraft();
     if (!parsed.valid) return;
 
@@ -340,6 +377,21 @@ export function mount(nextContext: SettingsPageContext): void {
 
   $("export-symbol-fill-color-input").addEventListener("input", () => {
     renderExportFillColorDraft();
+  });
+
+  $("export-path-input").addEventListener("input", () => {
+    renderRequiredPathValidation(
+      "export-path-input",
+      "export-path-feedback",
+      "btn-apply-export-path",
+    );
+  });
+  $("imported-parts-save-path-input").addEventListener("input", () => {
+    renderRequiredPathValidation(
+      "imported-parts-save-path-input",
+      "imported-parts-save-path-feedback",
+      "btn-apply-imported-parts-save-path",
+    );
   });
 }
 

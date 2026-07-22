@@ -269,6 +269,9 @@ const enTranslations: Record<string, string> = {
   "status.none": "none",
   "toast.dismiss": "Dismiss notification",
   "monitor.copiedIds": "Matched IDs copied to clipboard.",
+  "validation.required": "This path cannot be empty.",
+  "validation.invalidLcscId": "Use an LCSC ID such as C2040.",
+  "validation.invalidColor": "Use #RRGGBB or #RRGGBBAA.",
 };
 
 const zhTranslations: Record<string, string> = {
@@ -548,6 +551,9 @@ const zhTranslations: Record<string, string> = {
   "status.none": "\u65e0",
   "toast.dismiss": "\u5173\u95ed\u901a\u77e5",
   "monitor.copiedIds": "\u5339\u914d\u7684 ID \u5df2\u590d\u5236\u5230\u526a\u8d34\u677f\u3002",
+  "validation.required": "\u8def\u5f84\u4e0d\u80fd\u4e3a\u7a7a\u3002",
+  "validation.invalidLcscId": "\u8bf7\u4f7f\u7528 C2040 \u8fd9\u6837\u7684 LCSC ID\u3002",
+  "validation.invalidColor": "\u8bf7\u4f7f\u7528 #RRGGBB \u6216 #RRGGBBAA\u3002",
 };
 
 /** Resolve `key` against the active (zh) table, then en, then return the key itself. */

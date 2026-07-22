@@ -1056,6 +1056,12 @@ textarea,
   color: var(--text-2);
   font-size: 12px;
 }
+.field-feedback {
+  margin-top: 4px;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.35;
+}
 .msg-info {
   border-color: rgba(134, 183, 237, 0.25);
   color: var(--info);
