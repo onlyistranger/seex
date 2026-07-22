@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { mountIcons } from "./icons";
 import { invokeState } from "./ipc";
 import { translate } from "./i18n";
+import { mountToast } from "./ui/toast";
 import { exportPage } from "./pages/export";
 import { libraryPage } from "./pages/library";
 import { inventoryPage } from "./pages/inventory";
@@ -121,6 +122,7 @@ function queueExportConfigWrite(operation: () => Promise<void>): Promise<void> {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  mountToast();
   setPreviewContext({
     getDefaultModelFormat: () => lastState?.default_model_format ?? "wrl",
   });

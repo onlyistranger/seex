@@ -10,6 +10,7 @@ import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
 import { stateFieldsChanged } from "../patched-render";
 import { settingsPage } from "./settings";
+import { toast } from "../ui/toast";
 import type {
   AppState,
   ExportCardOptions,
@@ -227,6 +228,11 @@ function finishExportProgress(payload: ExportFinishedPayload): void {
   exportUi[payload.tool].progress = null;
   exportUi[payload.tool].notice = null;
   exportUi[payload.tool].resultKind = payload.success ? "success" : "error";
+  if (payload.success) {
+    toast.success(payload.message);
+  } else {
+    toast.error(payload.message);
+  }
   rerender();
 }
 
@@ -237,14 +243,16 @@ function showExportStartResult(result: string): boolean {
   }
 
   exportUi.export.progress = null;
-  exportUi.export.notice = { kind: "warn", message: result };
+  exportUi.export.notice = null;
+  toast.warn(result);
   rerender();
   return false;
 }
 
 function showExportError(error: string): void {
   exportUi.export.progress = null;
-  exportUi.export.notice = { kind: "error", message: error };
+  exportUi.export.notice = null;
+  toast.error(error);
   rerender();
 }
 

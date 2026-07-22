@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
 import { tupleListChanged } from "../patched-render";
+import { toast } from "../ui/toast";
 import type { AppState, ExportMessageKind } from "../types";
 import { $, applyTooltips, escapeAttr, escapeHtml, syncInputValue } from "../utils";
 
@@ -28,21 +29,6 @@ let mounted = false;
 let showMatched = true;
 let matchQuick = true;
 let matchFull = true;
-let monitorSaveResultTimer: number | null = null;
-
-function messageClass(kind: ExportMessageKind): string {
-  switch (kind) {
-    case "warn":
-      return "msg-warn";
-    case "success":
-      return "msg-success";
-    case "error":
-      return "msg-error";
-    default:
-      return "msg-info";
-  }
-}
-
 function buildKeyword(): string {
   const parts: string[] = [];
   if (matchFull) parts.push(PATTERN_FULL);
@@ -60,19 +46,8 @@ function classifySaveResult(message: string): ExportMessageKind {
 }
 
 function showMonitorSaveResult(message: string, kind?: ExportMessageKind): void {
-  const element = $("monitor-save-result");
   const resolvedKind = kind ?? classifySaveResult(message);
-  element.textContent = message;
-  element.className = `msg ${messageClass(resolvedKind)}`;
-
-  if (monitorSaveResultTimer !== null) {
-    window.clearTimeout(monitorSaveResultTimer);
-  }
-  monitorSaveResultTimer = window.setTimeout(() => {
-    element.textContent = "";
-    element.className = "msg msg-info hidden";
-    monitorSaveResultTimer = null;
-  }, 6000);
+  toast[resolvedKind](message);
 }
 
 function renderMatchedList(items: [string, string][]): void {
@@ -236,9 +211,16 @@ export function mount(nextContext: MonitorPageContext): void {
   });
 
   $("btn-copy-ids").addEventListener("click", async () => {
-    const ids: string[] = await invoke("get_unique_ids");
-    if (ids.length > 0) {
+    try {
+      const ids: string[] = await invoke("get_unique_ids");
+      if (ids.length === 0) {
+        toast.warn(t("monitor.noMatches"));
+        return;
+      }
       await invoke("copy_to_clipboard", { text: ids.join("\n") });
+      toast.success(t("monitor.copiedIds"));
+    } catch (error) {
+      toast.error(errorMessage(error));
     }
   });
 
@@ -315,7 +297,12 @@ export function mount(nextContext: MonitorPageContext): void {
     if (copy) {
       const value = copy.getAttribute("data-copy");
       if (value !== null) {
-        await invoke("copy_to_clipboard", { text: value });
+        try {
+          await invoke("copy_to_clipboard", { text: value });
+          toast.success(t("monitor.copiedIds"));
+        } catch (error) {
+          toast.error(errorMessage(error));
+        }
       }
       return;
     }
@@ -324,10 +311,14 @@ export function mount(nextContext: MonitorPageContext): void {
       "#matched-list [data-delete-matched]",
     ) as HTMLElement | null;
     if (deleteMatched) {
-      await invoke("delete_matched", {
-        index: Number.parseInt(deleteMatched.getAttribute("data-delete-matched") ?? "0", 10),
-      });
-      await nextContext.refresh();
+      try {
+        await invoke("delete_matched", {
+          index: Number.parseInt(deleteMatched.getAttribute("data-delete-matched") ?? "0", 10),
+        });
+        await nextContext.refresh();
+      } catch (error) {
+        toast.error(errorMessage(error));
+      }
       return;
     }
 
@@ -335,10 +326,14 @@ export function mount(nextContext: MonitorPageContext): void {
       "#history-list [data-delete-history]",
     ) as HTMLElement | null;
     if (deleteHistory) {
-      await invoke("delete_history", {
-        index: Number.parseInt(deleteHistory.getAttribute("data-delete-history") ?? "0", 10),
-      });
-      await nextContext.refresh();
+      try {
+        await invoke("delete_history", {
+          index: Number.parseInt(deleteHistory.getAttribute("data-delete-history") ?? "0", 10),
+        });
+        await nextContext.refresh();
+      } catch (error) {
+        toast.error(errorMessage(error));
+      }
     }
   });
 

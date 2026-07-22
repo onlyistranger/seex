@@ -12,6 +12,8 @@ import {
   ArrowUp,
   Box,
   ClipboardPaste,
+  CircleCheck,
+  CircleX,
   CircleHelp,
   createIcons,
   FolderCog,
@@ -35,6 +37,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide";
 
@@ -45,6 +48,8 @@ const iconSet = {
   ArrowUp,
   Box,
   ClipboardPaste,
+  CircleCheck,
+  CircleX,
   CircleHelp,
   FolderCog,
   FolderPlus,
@@ -67,6 +72,7 @@ const iconSet = {
   Settings2,
   SlidersHorizontal,
   Trash2,
+  TriangleAlert,
   X,
 };
 

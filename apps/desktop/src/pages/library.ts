@@ -11,6 +11,7 @@ import { mountIcons } from "../icons";
 import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
 import { renderSignature } from "../patched-render";
+import { toast } from "../ui/toast";
 import {
   closeImportedPreview,
   closeImportedStandalonePreview,
@@ -205,11 +206,8 @@ function classifySaveResult(message: string): ExportMessageKind {
 }
 
 function showImportedResult(message: string, kind?: ExportMessageKind): void {
-  importedUi.notice = {
-    kind: kind ?? classifySaveResult(message),
-    message,
-  };
-  renderImportedPanel();
+  const resolvedKind = kind ?? classifySaveResult(message);
+  toast[resolvedKind](message);
 }
 
 function renderImportedList(items: ImportedSymbol[]): void {
@@ -422,6 +420,7 @@ async function loadImportedSymbols(): Promise<void> {
     importedUi.sources = [];
     importedUi.items = [];
     importedUi.error = browserPreviewMode ? null : errorMessage(error);
+    if (!browserPreviewMode) toast.error(errorMessage(error));
     importedUi.selectedKeys.clear();
     closeImportedEditor();
   }
@@ -543,11 +542,7 @@ export function ensureLoaded(): void {
 }
 
 export function showPreviewNoModels(): void {
-  importedUi.notice = {
-    kind: "warn",
-    message: t("imported.previewNoModels"),
-  };
-  renderImportedPanel();
+  toast.warn(t("imported.previewNoModels"));
 }
 
 export function mount(nextContext: LibraryPageContext): void {

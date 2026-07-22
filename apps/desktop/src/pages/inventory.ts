@@ -9,6 +9,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { mountIcons } from "../icons";
 import { errorMessage } from "../ipc";
 import { renderSignature } from "../patched-render";
+import { toast } from "../ui/toast";
 import { librarySourceLabel } from "./library";
 import { closeImportedPreview, scheduleImportedPreview } from "../shared/preview";
 import type {
@@ -148,7 +149,8 @@ function inventoryTotal(part: InventoryPart): number {
 }
 
 function showInventoryNotice(message: string | null, kind: ExportMessageKind = "info") {
-  inventoryUi.notice = message ? { kind, message } : null;
+  if (message) toast[kind](message);
+  inventoryUi.notice = null;
   renderInventory();
 }
 
@@ -260,7 +262,7 @@ async function openInventoryLibraryPicker() {
     const response = await invoke<ImportedSymbolsResponse>("get_imported_symbols");
     inventoryUi.libraryItems = response.items;
   } catch (error) {
-    inventoryUi.notice = { kind: "error", message: errorMessage(error) };
+    toast.error(errorMessage(error));
   } finally {
     inventoryUi.libraryPickerLoading = false;
     renderInventoryLibraryPicker();
@@ -659,6 +661,7 @@ async function loadInventory() {
     inventoryUi.initialized = true;
   } catch (error) {
     inventoryUi.error = browserPreviewMode ? null : errorMessage(error);
+    if (!browserPreviewMode) toast.error(errorMessage(error));
   } finally {
     inventoryUi.loading = false;
     renderInventory();
@@ -719,7 +722,7 @@ async function saveInventoryPart() {
     },
   });
   resetInventoryEditor();
-  inventoryUi.notice = { kind: "success", message: "库存元件已保存。" };
+  showInventoryNotice("库存元件已保存。", "success");
   await loadInventory();
   if (inventoryUi.bomPreview && inventoryUi.bomPath) {
     await previewInventoryBom();
@@ -780,10 +783,10 @@ async function importInventoryBom() {
     const result = await invoke<ImportBomResult>("import_inventory_bom", {
       request: { path: preview.path, revision: preview.revision, rows },
     });
-    inventoryUi.notice = {
-      kind: "success",
-      message: `已导入 ${result.imported} 条库存记录，${result.existing} 条已存在。`,
-    };
+    showInventoryNotice(
+      `已导入 ${result.imported} 条库存记录，${result.existing} 条已存在。`,
+      "success",
+    );
     await loadInventory();
     await previewInventoryBom();
   } catch (error) {
@@ -817,7 +820,7 @@ async function confirmInventoryBom() {
     });
     inventoryUi.bomPreview = null;
     inventoryUi.bomSkipped.clear();
-    inventoryUi.notice = { kind: "success", message: t("inventory.confirmed") };
+    showInventoryNotice(t("inventory.confirmed"), "success");
     await loadInventory();
   } catch (error) {
     inventoryUi.bomError = errorMessage(error);
@@ -936,7 +939,7 @@ export function mount(): void {
     inventoryUi.busy = true;
     try {
       const result = await invoke<string>("import_matched_to_inventory");
-      inventoryUi.notice = { kind: "success", message: result };
+      showInventoryNotice(result, "success");
       await loadInventory();
     } catch (error) {
       showInventoryNotice(errorMessage(error), "error");
@@ -1116,7 +1119,7 @@ export function mount(): void {
       if (!id || !window.confirm("确定删除这个库存元件吗？")) return;
       try {
         await invoke("delete_inventory_part", { id });
-        inventoryUi.notice = { kind: "success", message: "库存元件已删除。" };
+        showInventoryNotice("库存元件已删除。", "success");
         await loadInventory();
       } catch (error) {
         showInventoryNotice(errorMessage(error), "error");

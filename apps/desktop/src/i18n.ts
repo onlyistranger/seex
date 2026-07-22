@@ -235,6 +235,8 @@ const enTranslations: Record<string, string> = {
     "Select a part for each row, then adjust location quantities before confirming.",
   "status.keyword": "Keyword:",
   "status.none": "none",
+  "toast.dismiss": "Dismiss notification",
+  "monitor.copiedIds": "Matched IDs copied to clipboard.",
 };
 
 const zhTranslations: Record<string, string> = {
@@ -475,6 +477,8 @@ const zhTranslations: Record<string, string> = {
     "\u4e3a\u6bcf\u884c\u9009\u62e9\u5143\u4ef6\u540e\uff0c\u53ef\u8c03\u6574\u5404\u5e93\u4f4d\u6263\u51cf\u91cf\uff0c\u518d\u786e\u8ba4\u751f\u4ea7\u3002",
   "status.keyword": "\u5173\u952e\u5b57:",
   "status.none": "\u65e0",
+  "toast.dismiss": "\u5173\u95ed\u901a\u77e5",
+  "monitor.copiedIds": "\u5339\u914d\u7684 ID \u5df2\u590d\u5236\u5230\u526a\u8d34\u677f\u3002",
 };
 
 /** Resolve `key` against the active (zh) table, then en, then return the key itself. */
