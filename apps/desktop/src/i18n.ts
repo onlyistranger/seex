@@ -218,6 +218,12 @@ const enTranslations: Record<string, string> = {
   "inventory.loadErrorGuide": "The inventory store could not be read. Try loading again.",
   "inventory.bomTitle": "CSV Production Deduction",
   "inventory.preview": "Preview Deduction",
+  "inventory.stepPreview": "Preview",
+  "inventory.stepImport": "Import",
+  "inventory.stepConfirm": "Confirm",
+  "inventory.stepPreviewHint": "Choose a CSV and preview the deduction details.",
+  "inventory.stepImportHint": "Import is optional; existing inventory can be confirmed directly.",
+  "inventory.stepConfirmHint": "Review allocations, then confirm the stock deduction.",
   "inventory.importBom": "Import BOM to Inventory",
   "inventory.importBomHint":
     "Create zero-stock records from this BOM without changing stock quantities.",
@@ -486,6 +492,14 @@ const zhTranslations: Record<string, string> = {
     "\u5e93\u5b58\u6570\u636e\u65e0\u6cd5\u8bfb\u53d6\uff0c\u8bf7\u91cd\u8bd5\u52a0\u8f7d\u3002",
   "inventory.bomTitle": "CSV \u751f\u4ea7\u6263\u51cf\u9884\u89c8",
   "inventory.preview": "\u9884\u89c8\u6263\u51cf",
+  "inventory.stepPreview": "\u9884\u89c8",
+  "inventory.stepImport": "\u5bfc\u5165",
+  "inventory.stepConfirm": "\u786e\u8ba4",
+  "inventory.stepPreviewHint": "\u9009\u62e9 CSV \u5e76\u9884\u89c8\u6263\u51cf\u660e\u7ec6\u3002",
+  "inventory.stepImportHint":
+    "\u5bfc\u5165\u662f\u53ef\u9009\u6b65\u9aa4\uff0c\u5df2\u6709\u5e93\u5b58\u53ef\u76f4\u63a5\u786e\u8ba4\u3002",
+  "inventory.stepConfirmHint":
+    "\u68c0\u67e5\u5e93\u4f4d\u5206\u914d\u540e\uff0c\u786e\u8ba4\u6263\u51cf\u5e93\u5b58\u3002",
   "inventory.importBom": "\u5bfc\u5165 BOM \u5230\u5e93\u5b58",
   "inventory.importBomHint":
     "\u4ec5\u5efa\u7acb\u96f6\u5e93\u5b58\u8bb0\u5f55\uff0c\u4e0d\u4f1a\u6539\u53d8\u73b0\u6709\u5e93\u5b58\u6570\u91cf\u3002",

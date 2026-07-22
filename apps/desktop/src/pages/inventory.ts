@@ -35,6 +35,7 @@ import { translate } from "../i18n";
 const t = translate;
 
 const browserPreviewMode = !("__TAURI_INTERNALS__" in window);
+type BomStep = "preview" | "import" | "confirm";
 
 let mounted = false;
 let lastInventoryLocationStructureSignature: string | null = null;
@@ -80,6 +81,7 @@ const inventoryUi: {
   bomBoards: string;
   bomLoading: boolean;
   bomPreview: BomPreview | null;
+  bomStep: BomStep;
   bomSkipped: Set<number>;
   bomLibrarySelections: Record<number, string>;
   bomError: string | null;
@@ -112,6 +114,7 @@ const inventoryUi: {
   bomBoards: "1",
   bomLoading: false,
   bomPreview: null,
+  bomStep: "preview",
   bomSkipped: new Set(),
   bomLibrarySelections: {},
   bomError: null,
@@ -452,7 +455,30 @@ function bomLibraryOptions(row: BomPreviewRow): string {
     .join("")}`;
 }
 
+function renderInventoryBomStepper(): void {
+  const stepper = $("inventory-bom-stepper");
+  const status = $("inventory-bom-step-status");
+  const steps: BomStep[] = ["preview", "import", "confirm"];
+  const current: BomStep = inventoryUi.bomPreview ? inventoryUi.bomStep : "preview";
+  const currentIndex = steps.indexOf(current);
+  const statusKey =
+    current === "preview"
+      ? "inventory.stepPreviewHint"
+      : current === "import"
+        ? "inventory.stepImportHint"
+        : "inventory.stepConfirmHint";
+
+  status.textContent = t(statusKey);
+  stepper.querySelectorAll<HTMLElement>("[data-bom-step]").forEach((element) => {
+    const step = element.dataset.bomStep as BomStep | undefined;
+    const index = step ? steps.indexOf(step) : -1;
+    element.classList.toggle("is-current", step === current);
+    element.classList.toggle("is-complete", index >= 0 && index < currentIndex);
+  });
+}
+
 function renderInventoryBomPreview() {
+  renderInventoryBomStepper();
   const container = $("inventory-bom-preview");
   const preview = inventoryUi.bomPreview;
   const signature = renderSignature({
@@ -535,7 +561,8 @@ function renderInventoryBomPreview() {
   });
   ($("btn-confirm-inventory-bom") as HTMLButtonElement).disabled =
     !canConfirm || inventoryUi.bomLoading;
-  ($("btn-import-inventory-bom") as HTMLButtonElement).disabled = inventoryUi.bomLoading;
+  ($("btn-import-inventory-bom") as HTMLButtonElement).disabled =
+    inventoryUi.bomLoading || inventoryUi.bomStep === "confirm";
   if (contentChanged) applyTooltips(container);
 }
 
@@ -756,6 +783,7 @@ async function previewInventoryBom() {
     !Number.isSafeInteger(boards) ||
     boards < 1
   ) {
+    inventoryUi.bomStep = "preview";
     inventoryUi.bomError = "请选择 CSV，并输入大于零的整数板数。";
     renderInventory();
     return;
@@ -769,10 +797,12 @@ async function previewInventoryBom() {
       boards,
     });
     inventoryUi.bomPreview = preview;
+    inventoryUi.bomStep = "import";
     inventoryUi.bomSkipped = new Set();
     inventoryUi.bomLibrarySelections = {};
   } catch (error) {
     inventoryUi.bomPreview = null;
+    inventoryUi.bomStep = "preview";
     inventoryUi.bomError = errorMessage(error);
   } finally {
     inventoryUi.bomLoading = false;
@@ -808,6 +838,7 @@ async function importInventoryBom() {
     );
     await loadInventory();
     await previewInventoryBom();
+    inventoryUi.bomStep = "confirm";
   } catch (error) {
     inventoryUi.bomError = errorMessage(error);
   } finally {
@@ -838,6 +869,7 @@ async function confirmInventoryBom() {
       },
     });
     inventoryUi.bomPreview = null;
+    inventoryUi.bomStep = "preview";
     inventoryUi.bomSkipped.clear();
     showInventoryNotice(t("inventory.confirmed"), "success");
     await loadInventory();
@@ -981,6 +1013,7 @@ export function mount(): void {
   });
   $("btn-close-inventory-bom").addEventListener("click", () => {
     inventoryUi.bomPreview = null;
+    inventoryUi.bomStep = "preview";
     inventoryUi.bomError = null;
     $("inventory-bom-panel").classList.add("hidden");
     renderInventoryBomPreview();
@@ -999,6 +1032,7 @@ export function mount(): void {
       if (typeof selected === "string") {
         inventoryUi.bomPath = selected;
         inventoryUi.bomPreview = null;
+        inventoryUi.bomStep = "preview";
         inventoryUi.bomError = null;
         $("inventory-bom-panel").classList.remove("hidden");
         renderInventory();

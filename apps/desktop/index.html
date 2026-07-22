@@ -347,6 +347,8 @@
             </div>
             <div id="inventory-bom-panel" class="panel inventory-bom-panel hidden">
               <div class="panel-header compact"><div><h2 data-i18n="inventory.bomTitle">CSV 生产扣减预览</h2></div><button class="btn-ghost btn-sm" id="btn-close-inventory-bom" title="关闭 CSV 扣减" data-i18n="imported.cancel">关闭</button></div>
+              <div id="inventory-bom-stepper" class="bom-stepper" aria-label="BOM workflow"><div class="bom-step" data-bom-step="preview"><span class="bom-step-number">1</span><strong data-i18n="inventory.stepPreview">预览</strong></div><div class="bom-step-connector"></div><div class="bom-step" data-bom-step="import"><span class="bom-step-number">2</span><strong data-i18n="inventory.stepImport">导入</strong></div><div class="bom-step-connector"></div><div class="bom-step" data-bom-step="confirm"><span class="bom-step-number">3</span><strong data-i18n="inventory.stepConfirm">确认</strong></div></div>
+              <div id="inventory-bom-step-status" class="hint bom-step-status" data-i18n="inventory.stepPreviewHint">选择 CSV 并预览扣减明细。</div>
               <div class="row inventory-bom-controls"><input id="inventory-bom-path" type="text" readonly title="已选择的 BOM CSV 文件" /><input id="inventory-bom-boards" type="text" value="1" aria-label="板数" title="需要生产的电路板数量" /><button class="btn-outline" id="btn-select-inventory-bom" data-i18n="export.browse">选择 CSV</button><button class="btn-primary has-tooltip" id="btn-preview-inventory-bom" title="读取 CSV 并计算每个元件的需求量" data-i18n="inventory.preview">预览扣减</button></div>
               <div id="inventory-bom-feedback" class="msg msg-info hidden"></div>
               <div id="inventory-bom-preview" class="inventory-bom-preview hidden"></div>
