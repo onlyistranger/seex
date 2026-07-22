@@ -6,6 +6,7 @@ import { mountIcons } from "./icons";
 import { errorMessage, invokeState } from "./ipc";
 import { translate } from "./i18n";
 import { exportPage } from "./pages/export";
+import { monitorPage } from "./pages/monitor";
 import {
   closeImportedPreview,
   closeImportedStandalonePreview,
@@ -44,9 +45,6 @@ import type {
 const browserPreviewMode = !("__TAURI_INTERNALS__" in window);
 
 let currentPage: PageName = "monitor";
-let showMatched = true;
-let matchQuick = true;
-let matchFull = true;
 let lastState: AppState | null = null;
 
 const importedUi: {
@@ -148,9 +146,6 @@ const inventoryUi: {
   libraryPickerLoading: false,
   libraryPickerQuery: "",
 };
-
-const PATTERN_QUICK = "regex:(?m)^(C\\d{3,})$";
-const PATTERN_FULL = "regex:\u7f16\u53f7[\uff1a:]\\s*(C\\d+)";
 
 function t(key: string): string {
   return translate(key);
@@ -271,13 +266,6 @@ function closeImportedEditor() {
   importedUi.editDraftSourceFile = "";
 }
 
-function buildKeyword(): string {
-  const parts: string[] = [];
-  if (matchFull) parts.push(PATTERN_FULL);
-  if (matchQuick) parts.push(PATTERN_QUICK);
-  return parts.join("||");
-}
-
 function applyStaticTranslations() {
   document.documentElement.lang = "zh-CN";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
@@ -289,7 +277,6 @@ function applyStaticTranslations() {
     const key = el.getAttribute("data-i18n-placeholder")!;
     (el as HTMLInputElement).placeholder = t(key);
   });
-  $("btn-toggle-matched").textContent = showMatched ? t("monitor.show") : t("monitor.hide");
   mountIcons();
   applyTooltips();
   renderImportedPanel();
@@ -340,102 +327,13 @@ function rerenderState() {
 }
 
 function renderState(state: AppState) {
-  const noneLabel = t("status.none");
-
-  $("status-keyword").textContent = state.keyword || noneLabel;
-  $("status-counts").textContent = `历史 ${state.history_count} · 匹配 ${state.matched_count}`;
-  $("btn-toggle-always-on-top").textContent = state.always_on_top
-    ? t("status.alwaysOnTopOn")
-    : t("status.alwaysOnTopOff");
-  $("btn-toggle-always-on-top").classList.toggle("active", state.always_on_top);
-
-  syncInputValue("history-save-path-input", state.history_save_path);
-  syncInputValue("matched-save-path-input", state.matched_save_path);
   syncInputValue("imported-parts-save-path-input", state.imported_parts_save_path);
 
+  monitorPage.render(state);
   exportPage.render(state);
-
-  const monBtn = $("btn-toggle-monitor");
-  monBtn.classList.toggle("active", state.monitoring);
-  monBtn.textContent = state.monitoring ? t("monitor.monitoring") : t("monitor.paused");
-
-  $("matched-count").textContent = String(state.matched_count);
-  if (showMatched && state.matched.length > 0) {
-    $("matched-list").classList.remove("hidden");
-    $("matched-empty").classList.add("hidden");
-    renderMatchedList(state.matched);
-  } else if (state.matched.length === 0) {
-    $("matched-list").classList.add("hidden");
-    $("matched-empty").classList.remove("hidden");
-  } else {
-    $("matched-list").classList.add("hidden");
-    $("matched-empty").classList.add("hidden");
-  }
-
-  if (state.history.length > 0) {
-    $("latest-preview").classList.remove("hidden");
-    $("history-waiting").classList.add("hidden");
-    const [time, content] = state.history[0];
-    $("latest-time").textContent = `${t("monitor.latest")} ${time}`;
-    ($("latest-content") as HTMLTextAreaElement).value = content;
-  } else {
-    $("latest-preview").classList.add("hidden");
-    $("history-waiting").classList.remove("hidden");
-  }
-
-  $("history-count-badge").textContent = String(state.history_count);
-  if (state.history.length > 0) {
-    $("history-list").classList.remove("hidden");
-    $("history-empty").classList.add("hidden");
-    renderHistoryList(state.history);
-  } else if (state.history.length === 0) {
-    $("history-list").classList.add("hidden");
-    $("history-empty").classList.remove("hidden");
-  }
 
   renderImportedPanel();
   applyTooltips();
-}
-
-function renderMatchedList(items: [string, string][]) {
-  const copyLabel = t("monitor.copy");
-  const c = $("matched-list");
-  c.innerHTML = "";
-  items.forEach(([time, value], idx) => {
-    const row = document.createElement("div");
-    row.className = "item-row";
-    row.innerHTML = `
-      <span class="item-time">${escapeHtml(time)}</span>
-      <span class="item-value">${escapeHtml(value)}</span>
-      <span class="item-actions">
-        <button data-copy="${escapeAttr(value)}" title="${copyLabel}">${copyLabel}</button>
-        <button data-delete-matched="${idx}" title="${t("monitor.delete")}">&times;</button>
-      </span>`;
-    c.appendChild(row);
-  });
-  applyTooltips(c);
-}
-
-function renderHistoryList(items: [string, string][]) {
-  const copyLabel = t("monitor.copy");
-  const c = $("history-list");
-  c.innerHTML = "";
-  items.forEach(([time, content], idx) => {
-    const preview = content.split("\n")[0].substring(0, 80);
-    const div = document.createElement("div");
-    div.className = "history-item";
-    div.innerHTML = `
-      <div class="item-row">
-        <span class="item-time">${escapeHtml(time)}</span>
-        <span class="item-value">${escapeHtml(preview)}</span>
-        <span class="item-actions">
-          <button data-copy="${escapeAttr(content)}" title="${copyLabel}">${copyLabel}</button>
-          <button data-delete-history="${idx}" title="${t("monitor.delete")}">&times;</button>
-        </span>
-      </div>`;
-    c.appendChild(div);
-  });
-  applyTooltips(c);
 }
 
 function renderImportedList(items: ImportedSymbol[]) {
@@ -632,24 +530,6 @@ async function selectSaveFile(
     ],
   });
   return typeof selected === "string" ? selected : null;
-}
-
-let monitorSaveResultTimer: number | null = null;
-
-function showMonitorSaveResult(message: string, kind?: ExportMessageKind) {
-  const el = $("monitor-save-result");
-  const resolvedKind: ExportMessageKind = kind ?? classifySaveResult(message);
-  el.textContent = message;
-  el.className = `msg ${messageClass(resolvedKind)}`;
-
-  if (monitorSaveResultTimer !== null) {
-    window.clearTimeout(monitorSaveResultTimer);
-  }
-  monitorSaveResultTimer = window.setTimeout(() => {
-    el.textContent = "";
-    el.className = "msg msg-info hidden";
-    monitorSaveResultTimer = null;
-  }, 6000);
 }
 
 function classifySaveResult(message: string): ExportMessageKind {
@@ -1484,45 +1364,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("sidebar").classList.toggle("collapsed");
   });
 
-  $("btn-toggle-always-on-top").addEventListener("click", async () => {
-    const next = !(lastState?.always_on_top ?? false);
-    await invoke("set_window_always_on_top", { alwaysOnTop: next });
-    await refreshState();
-  });
-
-  $("btn-match-quick").addEventListener("click", async () => {
-    matchQuick = !matchQuick;
-    $("btn-match-quick").classList.toggle("active", matchQuick);
-    await invoke("set_keyword", { keyword: buildKeyword() });
-    await refreshState();
-  });
-
-  $("btn-match-full").addEventListener("click", async () => {
-    matchFull = !matchFull;
-    $("btn-match-full").classList.toggle("active", matchFull);
-    await invoke("set_keyword", { keyword: buildKeyword() });
-    await refreshState();
-  });
-
-  $("btn-toggle-monitor").addEventListener("click", async () => {
-    await invoke("toggle_monitoring");
-    await refreshState();
-  });
-
-  $("btn-toggle-matched").addEventListener("click", () => {
-    showMatched = !showMatched;
-    $("btn-toggle-matched").classList.toggle("active", showMatched);
-    $("btn-toggle-matched").textContent = showMatched ? t("monitor.show") : t("monitor.hide");
-    void refreshState();
-  });
-
-  $("btn-copy-ids").addEventListener("click", async () => {
-    const ids: string[] = await invoke("get_unique_ids");
-    if (ids.length > 0) {
-      await invoke("copy_to_clipboard", { text: ids.join("\n") });
-    }
-  });
-
   exportPage.mount({
     refresh: refreshState,
     selectDirectory,
@@ -1534,6 +1375,12 @@ window.addEventListener("DOMContentLoaded", async () => {
         await loadImportedSymbols();
       }
     },
+  });
+
+  monitorPage.mount({
+    refresh: refreshState,
+    queueConfigWrite: queueExportConfigWrite,
+    selectSaveFile,
   });
 
   $("btn-refresh-imported").addEventListener("click", async () => {
@@ -1803,81 +1650,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         showImportedResult(errorMessage(error), "error");
       }
     });
-  });
-
-  $("btn-save-history").addEventListener("click", async () => {
-    try {
-      const result = await invoke<string>("save_history");
-      showMonitorSaveResult(result);
-    } catch (error) {
-      showMonitorSaveResult(errorMessage(error), "error");
-    }
-  });
-
-  $("btn-apply-history-save-path").addEventListener("click", async () => {
-    const path = ($("history-save-path-input") as HTMLInputElement).value;
-    await queueExportConfigWrite(async () => {
-      await invoke("set_history_save_path", { path });
-      await refreshState();
-    });
-  });
-
-  $("btn-browse-history-save-path").addEventListener("click", async () => {
-    const current = ($("history-save-path-input") as HTMLInputElement).value;
-    const selected = await selectSaveFile("Choose Save History file", current);
-    if (selected) {
-      ($("history-save-path-input") as HTMLInputElement).value = selected;
-      await queueExportConfigWrite(async () => {
-        await invoke("set_history_save_path", { path: selected });
-        await refreshState();
-      });
-    }
-  });
-
-  $("btn-apply-matched-save-path").addEventListener("click", async () => {
-    const path = ($("matched-save-path-input") as HTMLInputElement).value;
-    await queueExportConfigWrite(async () => {
-      await invoke("set_matched_save_path", { path });
-      await refreshState();
-    });
-  });
-
-  $("btn-browse-matched-save-path").addEventListener("click", async () => {
-    const current = ($("matched-save-path-input") as HTMLInputElement).value;
-    const selected = await selectSaveFile("Choose Export Matched file", current);
-    if (selected) {
-      ($("matched-save-path-input") as HTMLInputElement).value = selected;
-      await queueExportConfigWrite(async () => {
-        await invoke("set_matched_save_path", { path: selected });
-        await refreshState();
-      });
-    }
-  });
-
-  $("btn-save-matched").addEventListener("click", async () => {
-    try {
-      const result = await invoke<string>("save_matched");
-      showMonitorSaveResult(result);
-    } catch (error) {
-      showMonitorSaveResult(errorMessage(error), "error");
-    }
-  });
-
-  $("btn-clear-all").addEventListener("click", () => {
-    $("btn-clear-all").classList.add("hidden");
-    $("clear-confirm").classList.remove("hidden");
-  });
-
-  $("btn-clear-confirm").addEventListener("click", async () => {
-    $("btn-clear-all").classList.remove("hidden");
-    $("clear-confirm").classList.add("hidden");
-    await invoke("clear_all");
-    await refreshState();
-  });
-
-  $("btn-clear-cancel").addEventListener("click", () => {
-    $("btn-clear-all").classList.remove("hidden");
-    $("clear-confirm").classList.add("hidden");
   });
 
   $("inventory-search").addEventListener("input", () => {
@@ -2175,12 +1947,6 @@ window.addEventListener("DOMContentLoaded", async () => {
       }
     }
 
-    const copyVal = target.getAttribute("data-copy");
-    if (copyVal !== null) {
-      await invoke("copy_to_clipboard", { text: copyVal });
-      return;
-    }
-
     const importedCopy = target.getAttribute("data-copy-imported");
     if (importedCopy !== null) {
       await invoke("copy_to_clipboard", { text: importedCopy });
@@ -2245,19 +2011,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         }
       });
       return;
-    }
-
-    const dm = target.getAttribute("data-delete-matched");
-    if (dm !== null) {
-      await invoke("delete_matched", { index: parseInt(dm, 10) });
-      await refreshState();
-      return;
-    }
-
-    const dh = target.getAttribute("data-delete-history");
-    if (dh !== null) {
-      await invoke("delete_history", { index: parseInt(dh, 10) });
-      await refreshState();
     }
   });
 });
