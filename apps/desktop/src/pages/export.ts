@@ -8,76 +8,25 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
-import type { ModelFormat } from "../model-preview";
+import { settingsPage } from "./settings";
 import type {
   AppState,
-  Export3dPathMode,
-  ExportAssetToggle,
   ExportCardOptions,
-  ExportField,
   ExportFinishedPayload,
   ExportMessageKind,
   ExportNotice,
-  ExportOverwriteField,
   ExportProgressPayload,
   ExportProgressState,
   ExportTool,
 } from "../types";
-import {
-  $,
-  parseOptionalHexColor,
-  parsePositiveIntOrFallback,
-  syncInputValue,
-  syncSelectValue,
-} from "../utils";
+import { $ } from "../utils";
 
 const t = translate;
 
 export interface ExportPageContext {
   refresh: () => Promise<void>;
-  selectDirectory: (title: string) => Promise<string | null>;
   queueConfigWrite: (operation: () => Promise<void>) => Promise<void>;
-  onExportPathChanged: () => Promise<void>;
 }
-
-const export3dModes: { id: string; value: Export3dPathMode }[] = [
-  { id: "btn-export-3d-mode-auto", value: "auto" },
-  { id: "btn-export-3d-mode-project", value: "project_relative" },
-  { id: "btn-export-3d-mode-library", value: "library_relative" },
-];
-
-const exportAssetToggles: ExportAssetToggle[] = [
-  {
-    key: "symbol",
-    labelKey: "export.exportAssetSymbol",
-    exportField: "export_symbol",
-    overwriteField: "export_overwrite_symbol",
-    exportButtonId: "btn-toggle-export-symbol",
-    overwriteButtonId: "btn-toggle-export-overwrite-symbol",
-    exportCommand: "set_export_symbol",
-    overwriteCommand: "set_export_overwrite_symbol",
-  },
-  {
-    key: "footprint",
-    labelKey: "export.exportAssetFootprint",
-    exportField: "export_footprint",
-    overwriteField: "export_overwrite_footprint",
-    exportButtonId: "btn-toggle-export-footprint",
-    overwriteButtonId: "btn-toggle-export-overwrite-footprint",
-    exportCommand: "set_export_footprint",
-    overwriteCommand: "set_export_overwrite_footprint",
-  },
-  {
-    key: "model_3d",
-    labelKey: "export.exportAssetModel3d",
-    exportField: "export_model_3d",
-    overwriteField: "export_overwrite_model_3d",
-    exportButtonId: "btn-toggle-export-model-3d",
-    overwriteButtonId: "btn-toggle-export-overwrite-model-3d",
-    exportCommand: "set_export_model_3d",
-    overwriteCommand: "set_export_overwrite_model_3d",
-  },
-];
 
 const exportUi: Record<
   ExportTool,
@@ -88,10 +37,6 @@ const exportUi: Record<
   }
 > = {
   export: { progress: null, notice: null, resultKind: "info" },
-};
-
-const exportUiState: { mode: Export3dPathMode } = {
-  mode: "auto",
 };
 
 let context: ExportPageContext | null = null;
@@ -115,35 +60,11 @@ function messageClass(kind: ExportMessageKind): string {
   }
 }
 
-function normalizeExport3dPathMode(value: unknown): Export3dPathMode | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase().replace(/[-\s]/g, "_");
-  if (normalized === "auto") return "auto";
-  if (["project_relative", "project", "kicad_project"].includes(normalized)) {
-    return "project_relative";
-  }
-  if (["library_relative", "library", "relative"].includes(normalized)) {
-    return "library_relative";
-  }
-  return null;
-}
-
 function rerender(): void {
   if (lastState) {
+    settingsPage.render(lastState);
     render(lastState);
   }
-}
-
-function exportEnabled(state: AppState, field: ExportField): boolean {
-  return Boolean(state[field]);
-}
-
-function exportOverwriteEnabled(state: AppState, field: ExportOverwriteField): boolean {
-  return Boolean(state[field]);
-}
-
-function hasAnyExportEnabled(state: AppState): boolean {
-  return exportAssetToggles.some((toggle) => exportEnabled(state, toggle.exportField));
 }
 
 function renderExportProgress(tool: ExportTool, running: boolean, fallbackMessage: string): void {
@@ -182,27 +103,6 @@ function renderExportProgress(tool: ExportTool, running: boolean, fallbackMessag
   message.textContent = progress.message;
   meta.textContent = determinate ? `${current}/${progress.total}` : "";
   bar.style.width = width;
-}
-
-function renderExportAssetToggles(state: AppState): boolean {
-  const anyExportEnabled = hasAnyExportEnabled(state);
-
-  exportAssetToggles.forEach((toggle) => {
-    const exportButton = $(toggle.exportButtonId) as HTMLButtonElement;
-    const overwriteButton = $(toggle.overwriteButtonId) as HTMLButtonElement;
-    const exportEnabledForAsset = exportEnabled(state, toggle.exportField);
-    const overwriteEnabled =
-      exportEnabledForAsset && exportOverwriteEnabled(state, toggle.overwriteField);
-
-    exportButton.classList.toggle("active", exportEnabledForAsset);
-    exportButton.setAttribute("aria-pressed", String(exportEnabledForAsset));
-
-    overwriteButton.classList.toggle("active", overwriteEnabled);
-    overwriteButton.disabled = !exportEnabledForAsset;
-    overwriteButton.setAttribute("aria-pressed", String(overwriteEnabled));
-  });
-
-  return anyExportEnabled;
 }
 
 function renderExportNotice(tool: ExportTool, derivedNotice: ExportNotice | null = null): void {
@@ -254,68 +154,11 @@ function syncExportProgressWithState(state: AppState): void {
   }
 }
 
-function syncOptionalExportState(state: AppState): void {
-  const mode = normalizeExport3dPathMode(state.export_path_mode);
-  if (mode) {
-    exportUiState.mode = mode;
-  }
-}
-
-function renderExport3dMode(): void {
-  export3dModes.forEach(({ id, value }) => {
-    const button = $(id) as HTMLButtonElement;
-    button.classList.toggle("active", exportUiState.mode === value);
-  });
-}
-
-function renderExportFillColorDraft(): void {
-  const input = $("export-symbol-fill-color-input") as HTMLInputElement;
-  const preview = $("export-symbol-fill-color-preview");
-  const status = $("export-symbol-fill-color-status");
-  const feedback = $("export-symbol-fill-color-feedback");
-  const parsed = parseOptionalHexColor(input.value);
-
-  if (!parsed.valid) {
-    preview.classList.add("disabled");
-    preview.setAttribute("aria-hidden", "true");
-    preview.removeAttribute("style");
-    status.textContent = t("export.exportFillColorAuto");
-    feedback.textContent = t("export.exportFillColorInvalid");
-    feedback.className = "msg msg-error";
-    return;
-  }
-
-  feedback.textContent = "";
-  feedback.className = "msg msg-error hidden";
-  if (parsed.normalized) {
-    preview.classList.remove("disabled");
-    preview.setAttribute("aria-hidden", "false");
-    preview.style.background = parsed.normalized;
-    status.textContent = parsed.normalized;
-  } else {
-    preview.classList.add("disabled");
-    preview.setAttribute("aria-hidden", "true");
-    preview.removeAttribute("style");
-    status.textContent = t("export.exportFillColorAuto");
-  }
-}
-
 export function render(state: AppState): void {
   lastState = state;
-  syncOptionalExportState(state);
   syncExportProgressWithState(state);
 
-  syncInputValue("export-path-input", state.export_output_path);
-  syncInputValue("export-parallel-input", String(state.export_parallel));
-  syncInputValue("export-symbol-fill-color-input", state.export_symbol_fill_color ?? "");
-  syncSelectValue("default-model-format-input", state.default_model_format);
-
-  $("export-terminal-status").textContent = state.export_show_terminal
-    ? t("export.terminalOn")
-    : t("export.terminalOff");
-  const exportHasExportSelection = renderExportAssetToggles(state);
-  renderExport3dMode();
-  renderExportFillColorDraft();
+  const exportHasExportSelection = settingsPage.hasAnyExportEnabled(state);
 
   renderExporterCard({
     tool: "export",
@@ -391,34 +234,8 @@ function showExportError(error: string): void {
   rerender();
 }
 
-async function syncExportInputs(): Promise<void> {
-  const path = ($("export-path-input") as HTMLInputElement).value;
-  const parallelValue = ($("export-parallel-input") as HTMLInputElement).value;
-  const parallel = parsePositiveIntOrFallback(parallelValue, 4);
-  const colorInput = ($("export-symbol-fill-color-input") as HTMLInputElement).value;
-  const parsedColor = parseOptionalHexColor(colorInput);
-
-  if (!parsedColor.valid) {
-    throw new Error(t("export.exportFillColorInvalid"));
-  }
-
-  await invoke("set_export_path", { path });
-  await invoke("set_export_parallel", { parallel });
-  await invoke("set_export_symbol_fill_color", { color: parsedColor.normalized });
-}
-
-async function setExport3dMode(mode: Export3dPathMode): Promise<void> {
-  const currentContext = context;
-  if (!currentContext) return;
-
-  await invoke("set_export_path_mode", { pathMode: mode });
-  exportUiState.mode = mode;
-  setExportNotice(null);
-  await currentContext.refresh();
-}
-
 async function exportComponents(): Promise<void> {
-  if (lastState && !hasAnyExportEnabled(lastState)) {
+  if (lastState && !settingsPage.hasAnyExportEnabled(lastState)) {
     setExportNotice(t("export.selectAtLeastOne"));
     return;
   }
@@ -428,7 +245,7 @@ async function exportComponents(): Promise<void> {
 
   try {
     await currentContext.queueConfigWrite(async () => {
-      await syncExportInputs();
+      await settingsPage.syncExportInputs();
       await currentContext.refresh();
     });
     startExportProgress(t("export.exportRunning"));
@@ -449,107 +266,6 @@ export function mount(nextContext: ExportPageContext): void {
   $("btn-export").addEventListener("click", () => {
     void exportComponents();
   });
-
-  $("btn-browse-export-folder").addEventListener("click", async () => {
-    const selected = await nextContext.selectDirectory("Select export directory");
-    if (!selected) return;
-
-    ($("export-path-input") as HTMLInputElement).value = selected;
-    await nextContext.queueConfigWrite(async () => {
-      await invoke("set_export_path", { path: selected });
-      await nextContext.onExportPathChanged();
-    });
-  });
-
-  $("btn-apply-export-path").addEventListener("click", async () => {
-    const path = ($("export-path-input") as HTMLInputElement).value;
-    await nextContext.queueConfigWrite(async () => {
-      await invoke("set_export_path", { path });
-      await nextContext.onExportPathChanged();
-    });
-  });
-
-  $("btn-toggle-export-terminal").addEventListener("click", async () => {
-    await nextContext.queueConfigWrite(async () => {
-      await invoke("toggle_export_terminal");
-      await nextContext.refresh();
-    });
-  });
-
-  exportAssetToggles.forEach((toggle) => {
-    $(toggle.exportButtonId).addEventListener("click", async () => {
-      const active = $(toggle.exportButtonId).classList.contains("active");
-      await nextContext.queueConfigWrite(async () => {
-        await invoke(toggle.exportCommand, { enabled: !active });
-        if (active) {
-          await invoke(toggle.overwriteCommand, { overwrite: false });
-        }
-        await nextContext.refresh();
-      });
-    });
-
-    $(toggle.overwriteButtonId).addEventListener("click", async () => {
-      const button = $(toggle.overwriteButtonId) as HTMLButtonElement;
-      if (button.disabled) return;
-
-      const active = button.classList.contains("active");
-      await nextContext.queueConfigWrite(async () => {
-        await invoke(toggle.overwriteCommand, { overwrite: !active });
-        await nextContext.refresh();
-      });
-    });
-  });
-
-  export3dModes.forEach(({ id, value }) => {
-    $(id).addEventListener("click", async () => {
-      await nextContext.queueConfigWrite(async () => {
-        await setExport3dMode(value);
-      });
-    });
-  });
-
-  $("btn-apply-default-model-format").addEventListener("click", async () => {
-    const format = ($("default-model-format-input") as HTMLSelectElement).value as ModelFormat;
-    await nextContext.queueConfigWrite(async () => {
-      await invoke("set_default_model_format", { format });
-      await nextContext.refresh();
-    });
-  });
-
-  $("btn-apply-export-parallel").addEventListener("click", async () => {
-    const value = ($("export-parallel-input") as HTMLInputElement).value;
-    const parallel = parsePositiveIntOrFallback(value, 4);
-    await nextContext.queueConfigWrite(async () => {
-      await invoke("set_export_parallel", { parallel });
-      await nextContext.refresh();
-    });
-  });
-
-  $("btn-apply-export-symbol-fill-color").addEventListener("click", async () => {
-    const input = $("export-symbol-fill-color-input") as HTMLInputElement;
-    const parsed = parseOptionalHexColor(input.value);
-    renderExportFillColorDraft();
-    if (!parsed.valid) return;
-
-    await nextContext.queueConfigWrite(async () => {
-      await invoke("set_export_symbol_fill_color", { color: parsed.normalized });
-      await nextContext.refresh();
-    });
-  });
-
-  $("btn-clear-export-symbol-fill-color").addEventListener("click", async () => {
-    const input = $("export-symbol-fill-color-input") as HTMLInputElement;
-    input.value = "";
-    renderExportFillColorDraft();
-    await nextContext.queueConfigWrite(async () => {
-      await invoke("set_export_symbol_fill_color", { color: null });
-      await nextContext.refresh();
-    });
-  });
-
-  $("export-symbol-fill-color-input").addEventListener("input", () => {
-    renderExportFillColorDraft();
-  });
 }
 
 export function onEvent(
@@ -563,4 +279,8 @@ export function onEvent(
   }
 }
 
-export const exportPage = { mount, render, onEvent };
+export function clearNotice(): void {
+  setExportNotice(null);
+}
+
+export const exportPage = { mount, render, onEvent, clearNotice };
