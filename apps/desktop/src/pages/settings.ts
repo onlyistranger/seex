@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { translate } from "../i18n";
 import type { ModelFormat } from "../model-preview";
+import { stateFieldsChanged } from "../patched-render";
 import type {
   AppState,
   Export3dPathMode,
@@ -77,6 +78,7 @@ const settingsUi: { mode: Export3dPathMode } = {
 
 let context: SettingsPageContext | null = null;
 let mounted = false;
+let lastState: AppState | null = null;
 
 function normalizeExport3dPathMode(value: unknown): Export3dPathMode | null {
   if (typeof value !== "string") return null;
@@ -167,18 +169,44 @@ function syncOptionalExportState(state: AppState): void {
 }
 
 export function render(state: AppState): void {
-  syncOptionalExportState(state);
-  syncInputValue("export-path-input", state.export_output_path);
-  syncInputValue("export-parallel-input", String(state.export_parallel));
-  syncInputValue("export-symbol-fill-color-input", state.export_symbol_fill_color ?? "");
-  syncSelectValue("default-model-format-input", state.default_model_format);
+  const previousState = lastState;
+  lastState = state;
+  const pathInputsChanged = stateFieldsChanged(previousState, state, [
+    "export_output_path",
+    "export_parallel",
+  ]);
+  const colorChanged = stateFieldsChanged(previousState, state, ["export_symbol_fill_color"]);
+  const modeChanged = stateFieldsChanged(previousState, state, ["export_path_mode"]);
+  const formatChanged = stateFieldsChanged(previousState, state, ["default_model_format"]);
+  const terminalChanged = stateFieldsChanged(previousState, state, ["export_show_terminal"]);
+  const togglesChanged = stateFieldsChanged(previousState, state, [
+    "export_symbol",
+    "export_footprint",
+    "export_model_3d",
+    "export_overwrite_symbol",
+    "export_overwrite_footprint",
+    "export_overwrite_model_3d",
+  ]);
 
-  $("export-terminal-status").textContent = state.export_show_terminal
-    ? t("export.terminalOn")
-    : t("export.terminalOff");
-  renderExportAssetToggles(state);
-  renderExport3dMode();
-  renderExportFillColorDraft();
+  if (pathInputsChanged) {
+    syncInputValue("export-path-input", state.export_output_path);
+    syncInputValue("export-parallel-input", String(state.export_parallel));
+  }
+  if (colorChanged) {
+    syncInputValue("export-symbol-fill-color-input", state.export_symbol_fill_color ?? "");
+    renderExportFillColorDraft();
+  }
+  if (formatChanged) syncSelectValue("default-model-format-input", state.default_model_format);
+  if (terminalChanged) {
+    $("export-terminal-status").textContent = state.export_show_terminal
+      ? t("export.terminalOn")
+      : t("export.terminalOff");
+  }
+  if (togglesChanged) renderExportAssetToggles(state);
+  if (modeChanged) {
+    syncOptionalExportState(state);
+    renderExport3dMode();
+  }
 }
 
 export async function syncExportInputs(): Promise<void> {

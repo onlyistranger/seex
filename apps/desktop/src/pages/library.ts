@@ -10,6 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { mountIcons } from "../icons";
 import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
+import { renderSignature } from "../patched-render";
 import {
   closeImportedPreview,
   closeImportedStandalonePreview,
@@ -25,7 +26,7 @@ import type {
   ImportedSymbolsResponse,
   LibrarySource,
 } from "../types";
-import { $, applyTooltips, escapeAttr, escapeHtml, formatMessage } from "../utils";
+import { $, applyTooltips, escapeAttr, escapeHtml, formatMessage, syncInputValue } from "../utils";
 
 const t = translate;
 const browserPreviewMode = !("__TAURI_INTERNALS__" in window);
@@ -73,6 +74,9 @@ const importedUi: {
 let lastState: AppState | null = null;
 let pageContext: LibraryPageContext | null = null;
 let mounted = false;
+let lastImportedListSignature: string | null = null;
+let lastImportedSourceOptionsSignature: string | null = null;
+let lastImportedSourcesSignature: string | null = null;
 
 export function librarySourceLabel(kind: string): string {
   return (
@@ -171,6 +175,13 @@ function closeImportedEditor(): void {
   importedUi.editDraftSourceFile = "";
 }
 
+function syncImportedDraftInput(id: string, value: string): void {
+  const input = $(id) as HTMLInputElement;
+  if (document.activeElement !== input || input.value === value) {
+    input.value = value;
+  }
+}
+
 function messageClass(kind: ExportMessageKind): string {
   switch (kind) {
     case "warn":
@@ -247,6 +258,13 @@ function renderImportedList(items: ImportedSymbol[]): void {
   applyTooltips(container);
 }
 
+function importedListSignature(items: ImportedSymbol[]): string {
+  return renderSignature({
+    items,
+    selectedKeys: Array.from(importedUi.selectedKeys),
+  });
+}
+
 function renderImportedPanel(): void {
   const filteredItems = filteredImportedItems();
   const selectedItems = selectedImportedItems();
@@ -281,18 +299,20 @@ function renderImportedPanel(): void {
   $("imported-total-count").textContent = String(totalParts.length);
   $("imported-filtered-count").textContent = String(filteredParts.length);
   $("imported-selected-count").textContent = String(selectedParts.length);
-  ($("imported-search-input") as HTMLInputElement).value = importedUi.query;
+  syncInputValue("imported-search-input", importedUi.query);
   const sourceFilter = $("imported-source-filter") as HTMLSelectElement;
   sourceFilter.value = importedUi.sourceFilter;
-  sourceFilter.innerHTML = `<option value="">全部来源</option>${Array.from(
-    new Set(importedUi.items.map((item) => item.source_kind)),
-  )
-    .sort()
-    .map(
-      (kind) =>
-        `<option value="${escapeAttr(kind)}">${escapeHtml(librarySourceLabel(kind))}</option>`,
-    )
-    .join("")}`;
+  const sourceKinds = Array.from(new Set(importedUi.items.map((item) => item.source_kind))).sort();
+  const sourceOptionsSignature = renderSignature(sourceKinds);
+  if (sourceOptionsSignature !== lastImportedSourceOptionsSignature) {
+    lastImportedSourceOptionsSignature = sourceOptionsSignature;
+    sourceFilter.innerHTML = `<option value="">全部来源</option>${sourceKinds
+      .map(
+        (kind) =>
+          `<option value="${escapeAttr(kind)}">${escapeHtml(librarySourceLabel(kind))}</option>`,
+      )
+      .join("")}`;
+  }
   sourceFilter.value = importedUi.sourceFilter;
   refreshButton.disabled = controlsDisabled;
   browseButton.disabled = controlsDisabled;
@@ -314,23 +334,27 @@ function renderImportedPanel(): void {
   const resolvedPath = importedUi.scannedPath || lastState?.export_output_path || t("status.none");
   path.textContent = `${t("imported.scannedPath")} ${resolvedPath}`;
   const sources = $("imported-sources");
-  sources.innerHTML = importedUi.sources
-    .map(
-      (source) =>
-        `<span class="library-source-chip" title="${escapeAttr(source.path)}"><b>${escapeHtml(librarySourceLabel(source.kind))}</b><small>${escapeHtml(source.path)}</small>${source.configured ? `<button class="icon-only" data-remove-kicad-library="${escapeAttr(source.path)}" title="移除外部库来源" aria-label="移除外部库来源"><i data-lucide="x"></i></button>` : ""}</span>`,
-    )
-    .join("");
-  mountIcons();
+  const sourcesSignature = renderSignature(importedUi.sources);
+  if (sourcesSignature !== lastImportedSourcesSignature) {
+    lastImportedSourcesSignature = sourcesSignature;
+    sources.innerHTML = importedUi.sources
+      .map(
+        (source) =>
+          `<span class="library-source-chip" title="${escapeAttr(source.path)}"><b>${escapeHtml(librarySourceLabel(source.kind))}</b><small>${escapeHtml(source.path)}</small>${source.configured ? `<button class="icon-only" data-remove-kicad-library="${escapeAttr(source.path)}" title="移除外部库来源" aria-label="移除外部库来源"><i data-lucide="x"></i></button>` : ""}</span>`,
+      )
+      .join("");
+    mountIcons();
+  }
 
   if (editingItem) {
     editorCard.classList.remove("hidden");
-    editSymbolInput.value = importedUi.editDraftSymbolName;
-    editLcscInput.value = importedUi.editDraftLcscPart;
+    syncImportedDraftInput("imported-edit-symbol-name-input", importedUi.editDraftSymbolName);
+    syncImportedDraftInput("imported-edit-lcsc-part-input", importedUi.editDraftLcscPart);
     $("imported-editor-source-file").textContent = importedUi.editDraftSourceFile;
   } else {
     editorCard.classList.add("hidden");
-    editSymbolInput.value = "";
-    editLcscInput.value = "";
+    syncImportedDraftInput("imported-edit-symbol-name-input", "");
+    syncImportedDraftInput("imported-edit-lcsc-part-input", "");
     $("imported-editor-source-file").textContent = "";
   }
 
@@ -359,7 +383,11 @@ function renderImportedPanel(): void {
   }
 
   if (filteredItems.length > 0) {
-    renderImportedList(filteredItems);
+    const listSignature = importedListSignature(filteredItems);
+    if (listSignature !== lastImportedListSignature) {
+      lastImportedListSignature = listSignature;
+      renderImportedList(filteredItems);
+    }
     table.classList.remove("hidden");
     empty.classList.add("hidden");
     return;

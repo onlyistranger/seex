@@ -8,6 +8,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { mountIcons } from "../icons";
 import { errorMessage } from "../ipc";
+import { renderSignature } from "../patched-render";
 import { librarySourceLabel } from "./library";
 import { closeImportedPreview, scheduleImportedPreview } from "../shared/preview";
 import type {
@@ -35,6 +36,11 @@ const t = translate;
 const browserPreviewMode = !("__TAURI_INTERNALS__" in window);
 
 let mounted = false;
+let lastInventoryLocationStructureSignature: string | null = null;
+let lastInventoryListSignature: string | null = null;
+let lastInventoryBomSignature: string | null = null;
+let lastInventoryProductionSignature: string | null = null;
+let lastInventoryLibraryPickerSignature: string | null = null;
 
 function messageClass(kind: ExportMessageKind): string {
   switch (kind) {
@@ -146,6 +152,13 @@ function showInventoryNotice(message: string | null, kind: ExportMessageKind = "
   renderInventory();
 }
 
+function syncInventoryDraftInput(id: string, value: string): void {
+  const input = $(id) as HTMLInputElement;
+  if (document.activeElement !== input || input.value === value) {
+    input.value = value;
+  }
+}
+
 function resetInventoryEditor() {
   inventoryUi.editingId = null;
   inventoryUi.draftSupplier = "";
@@ -202,9 +215,22 @@ function renderInventoryLibraryPicker() {
   const picker = $("inventory-library-picker");
   picker.classList.toggle("hidden", !inventoryUi.libraryPickerOpen);
   if (!inventoryUi.libraryPickerOpen) return;
-  ($("inventory-library-search") as HTMLInputElement).value = inventoryUi.libraryPickerQuery;
+  syncInventoryDraftInput("inventory-library-search", inventoryUi.libraryPickerQuery);
   const list = $("inventory-library-list");
   const items = filteredInventoryLibraryItems();
+  const existingParts = inventoryUi.allParts.map((part) => ({
+    id: part.id,
+    library_lcsc: part.library_lcsc,
+    library_source_file: part.library_source_file,
+    library_symbol_name: part.library_symbol_name,
+  }));
+  const signature = renderSignature({
+    loading: inventoryUi.libraryPickerLoading,
+    items,
+    existingParts,
+  });
+  if (signature === lastInventoryLibraryPickerSignature) return;
+  lastInventoryLibraryPickerSignature = signature;
   if (inventoryUi.libraryPickerLoading) {
     list.innerHTML = `<div class="empty-state">${escapeHtml(t("inventory.libraryLoading"))}</div>`;
     return;
@@ -270,9 +296,15 @@ function selectInventoryLibraryPart(libraryKey: string) {
 
 function renderInventoryLocationFields() {
   const container = $("inventory-location-fields");
-  container.innerHTML = inventoryUi.draftLocations
-    .map(
-      (location, index) => `
+  const structureSignature = renderSignature(inventoryUi.draftLocations.length);
+  if (
+    structureSignature !== lastInventoryLocationStructureSignature ||
+    container.children.length !== inventoryUi.draftLocations.length
+  ) {
+    lastInventoryLocationStructureSignature = structureSignature;
+    container.innerHTML = inventoryUi.draftLocations
+      .map(
+        (location, index) => `
         <div class="inventory-location-row" data-inventory-location-row="${index}">
           <input type="text" data-inventory-location="${index}" value="${escapeAttr(location.location)}" placeholder="${escapeAttr(t("inventory.locationPlaceholder"))}" />
           <input type="number" data-inventory-quantity="${index}" value="${location.quantity}" aria-label="${escapeAttr(t("inventory.quantity"))}" />
@@ -281,13 +313,39 @@ function renderInventoryLocationFields() {
           <button class="btn-ghost btn-sm icon-only" data-move-inventory-location="down" data-location-index="${index}" title="${escapeAttr(t("inventory.moveDown"))}" ${index === inventoryUi.draftLocations.length - 1 ? "disabled" : ""}><i data-lucide="arrow-down"></i></button>
           <button class="btn-ghost btn-sm icon-only" data-remove-inventory-location="${index}" title="${escapeAttr(t("inventory.removeLocation"))}"><i data-lucide="x"></i></button>
         </div>`,
-    )
-    .join("");
-  mountIcons();
-  applyTooltips(container);
+      )
+      .join("");
+    mountIcons();
+    applyTooltips(container);
+    return;
+  }
+
+  inventoryUi.draftLocations.forEach((location, index) => {
+    const row = container.querySelector(
+      `[data-inventory-location-row="${index}"]`,
+    ) as HTMLElement | null;
+    if (!row) return;
+    const locationInput = row.querySelector("[data-inventory-location]") as HTMLInputElement | null;
+    const quantityInput = row.querySelector("[data-inventory-quantity]") as HTMLInputElement | null;
+    if (locationInput && document.activeElement !== locationInput) {
+      locationInput.value = location.location;
+    }
+    if (quantityInput && document.activeElement !== quantityInput) {
+      quantityInput.value = String(location.quantity);
+    }
+  });
 }
 
 function renderInventoryList() {
+  const signature = renderSignature({
+    parts: inventoryUi.parts,
+    models: inventoryUi.parts.map((part) => {
+      const item = inventoryLibraryItem(part);
+      return [part.id, item?.models ?? []];
+    }),
+  });
+  if (signature === lastInventoryListSignature) return;
+  lastInventoryListSignature = signature;
   closeImportedPreview();
   const list = $("inventory-list");
   list.innerHTML = inventoryUi.parts
@@ -395,16 +453,25 @@ function bomLibraryOptions(row: BomPreviewRow): string {
 function renderInventoryBomPreview() {
   const container = $("inventory-bom-preview");
   const preview = inventoryUi.bomPreview;
+  const signature = renderSignature({
+    preview,
+    skipped: Array.from(inventoryUi.bomSkipped),
+    librarySelections: inventoryUi.bomLibrarySelections,
+    allParts: inventoryUi.allParts,
+  });
+  const contentChanged = signature !== lastInventoryBomSignature;
+  lastInventoryBomSignature = signature;
   if (!preview) {
     container.classList.add("hidden");
-    container.innerHTML = "";
+    if (contentChanged) container.innerHTML = "";
     ($("btn-confirm-inventory-bom") as HTMLButtonElement).disabled = true;
     ($("btn-import-inventory-bom") as HTMLButtonElement).disabled = true;
     return;
   }
 
   container.classList.remove("hidden");
-  container.innerHTML = `
+  if (contentChanged) {
+    container.innerHTML = `
     <div class="inventory-preview-summary">
       <span>${escapeHtml(t("inventory.previewHint"))}</span>
       <strong>${preview.rows.length} rows · ${preview.boards} board(s)</strong>
@@ -454,6 +521,7 @@ function renderInventoryBomPreview() {
         })
         .join("")}
     </div>`;
+  }
   const canConfirm = preview.rows.every((row) => {
     if (inventoryUi.bomSkipped.has(row.row_number)) return true;
     return (
@@ -466,7 +534,7 @@ function renderInventoryBomPreview() {
   ($("btn-confirm-inventory-bom") as HTMLButtonElement).disabled =
     !canConfirm || inventoryUi.bomLoading;
   ($("btn-import-inventory-bom") as HTMLButtonElement).disabled = inventoryUi.bomLoading;
-  applyTooltips(container);
+  if (contentChanged) applyTooltips(container);
 }
 
 function renderInventoryBomFeedback() {
@@ -482,6 +550,9 @@ function renderInventoryBomFeedback() {
 
 function renderInventoryProductionRecords() {
   const container = $("inventory-production-records");
+  const signature = renderSignature(inventoryUi.productionRecords);
+  if (signature === lastInventoryProductionSignature) return;
+  lastInventoryProductionSignature = signature;
   if (inventoryUi.productionRecords.length === 0) {
     container.innerHTML = `<div class="empty-state">${escapeHtml(t("inventory.noProduction"))}</div>`;
     return;
@@ -517,13 +588,13 @@ function renderInventory() {
       inventoryUi.draftName === "" &&
       inventoryUi.draftLocations.length === 0,
   );
-  ($("inventory-supplier") as HTMLInputElement).value = inventoryUi.draftSupplier;
-  ($("inventory-name") as HTMLInputElement).value = inventoryUi.draftName;
+  syncInventoryDraftInput("inventory-supplier", inventoryUi.draftSupplier);
+  syncInventoryDraftInput("inventory-name", inventoryUi.draftName);
   const packageInput = $("inventory-package") as HTMLInputElement;
-  packageInput.value = inventoryUi.draftPackage;
+  syncInventoryDraftInput("inventory-package", inventoryUi.draftPackage);
   packageInput.placeholder =
     inventoryUi.draftLibraryLcsc && !inventoryUi.draftPackage ? t("inventory.packagePending") : "";
-  ($("inventory-note") as HTMLInputElement).value = inventoryUi.draftNote;
+  syncInventoryDraftInput("inventory-note", inventoryUi.draftNote);
   const libraryStatus = $("inventory-library-status");
   if (inventoryUi.draftLibraryLcsc) {
     libraryStatus.textContent = inventoryUi.draftLibraryMissing
@@ -548,8 +619,8 @@ function renderInventory() {
     $("inventory-empty").classList.remove("hidden");
     $("inventory-empty").textContent = t("inventory.empty");
   }
-  ($("inventory-bom-path") as HTMLInputElement).value = inventoryUi.bomPath;
-  ($("inventory-bom-boards") as HTMLInputElement).value = inventoryUi.bomBoards;
+  syncInventoryDraftInput("inventory-bom-path", inventoryUi.bomPath);
+  syncInventoryDraftInput("inventory-bom-boards", inventoryUi.bomBoards);
   renderInventoryBomFeedback();
   renderInventoryBomPreview();
   $("inventory-production-panel").classList.toggle(

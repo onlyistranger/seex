@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
+import { stateFieldsChanged } from "../patched-render";
 import { settingsPage } from "./settings";
 import type {
   AppState,
@@ -63,7 +64,7 @@ function messageClass(kind: ExportMessageKind): string {
 function rerender(): void {
   if (lastState) {
     settingsPage.render(lastState);
-    render(lastState);
+    render(lastState, true);
   }
 }
 
@@ -148,15 +149,28 @@ function renderExporterCard(options: ExportCardOptions): void {
   renderExportResult(options.tool, options.result, busy, options.derivedNotice ?? null);
 }
 
-function syncExportProgressWithState(state: AppState): void {
+function syncExportProgressWithState(state: AppState): boolean {
   if (!state.export_running && exportUi.export.progress !== null) {
     exportUi.export.progress = null;
+    return true;
   }
+  return false;
 }
 
-export function render(state: AppState): void {
+export function render(state: AppState, force = false): void {
+  const previousState = lastState;
   lastState = state;
-  syncExportProgressWithState(state);
+  const progressChanged = syncExportProgressWithState(state);
+  const stateChanged = stateFieldsChanged(previousState, state, [
+    "matched_count",
+    "export_running",
+    "export_last_result",
+    "export_symbol",
+    "export_footprint",
+    "export_model_3d",
+  ]);
+
+  if (!force && !progressChanged && !stateChanged) return;
 
   const exportHasExportSelection = settingsPage.hasAnyExportEnabled(state);
 

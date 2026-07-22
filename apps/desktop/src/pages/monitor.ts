@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { errorMessage } from "../ipc";
 import { translate } from "../i18n";
+import { tupleListChanged } from "../patched-render";
 import type { AppState, ExportMessageKind } from "../types";
 import { $, applyTooltips, escapeAttr, escapeHtml, syncInputValue } from "../utils";
 
@@ -122,7 +123,10 @@ function renderToggleMatched(): void {
 }
 
 export function render(state: AppState): void {
+  const previousState = lastState;
   lastState = state;
+  const matchedChanged = tupleListChanged(previousState?.matched ?? null, state.matched);
+  const historyChanged = tupleListChanged(previousState?.history ?? null, state.history);
 
   const noneLabel = t("status.none");
   $("status-keyword").textContent = state.keyword || noneLabel;
@@ -143,7 +147,7 @@ export function render(state: AppState): void {
   if (showMatched && state.matched.length > 0) {
     $("matched-list").classList.remove("hidden");
     $("matched-empty").classList.add("hidden");
-    renderMatchedList(state.matched);
+    if (matchedChanged) renderMatchedList(state.matched);
   } else if (state.matched.length === 0) {
     $("matched-list").classList.add("hidden");
     $("matched-empty").classList.remove("hidden");
@@ -155,9 +159,11 @@ export function render(state: AppState): void {
   if (state.history.length > 0) {
     $("latest-preview").classList.remove("hidden");
     $("history-waiting").classList.add("hidden");
-    const [time, content] = state.history[0];
-    $("latest-time").textContent = `${t("monitor.latest")} ${time}`;
-    ($("latest-content") as HTMLTextAreaElement).value = content;
+    if (historyChanged) {
+      const [time, content] = state.history[0];
+      $("latest-time").textContent = `${t("monitor.latest")} ${time}`;
+      ($("latest-content") as HTMLTextAreaElement).value = content;
+    }
   } else {
     $("latest-preview").classList.add("hidden");
     $("history-waiting").classList.remove("hidden");
@@ -167,7 +173,7 @@ export function render(state: AppState): void {
   if (state.history.length > 0) {
     $("history-list").classList.remove("hidden");
     $("history-empty").classList.add("hidden");
-    renderHistoryList(state.history);
+    if (historyChanged) renderHistoryList(state.history);
   } else {
     $("history-list").classList.add("hidden");
     $("history-empty").classList.remove("hidden");
