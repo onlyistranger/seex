@@ -25,7 +25,10 @@ declare module "occt-import-js" {
   }
 
   export interface OcctImportApi {
-    ReadStepFile: (content: Uint8Array, params: Record<string, unknown> | null) => {
+    ReadStepFile: (
+      content: Uint8Array,
+      params: Record<string, unknown> | null,
+    ) => {
       meshes: OcctMesh[];
     };
   }
