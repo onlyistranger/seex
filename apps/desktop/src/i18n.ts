@@ -27,8 +27,12 @@ const enTranslations: Record<string, string> = {
   "monitor.show": "Show",
   "monitor.hide": "Hide",
   "monitor.noMatches": "No matches yet",
+  "monitor.noMatchesTitle": "No matched parts yet",
+  "monitor.noMatchesGuide": "Copy an LCSC ID to the clipboard to add it to the queue.",
   "monitor.clipboard": "Clipboard",
   "monitor.waiting": "Waiting for clipboard...",
+  "monitor.waitingTitle": "Waiting for clipboard...",
+  "monitor.waitingGuide": "Copy a component note or LCSC part to begin.",
   "monitor.saveHistory": "Save History",
   "monitor.exportMatched": "Export Matched",
   "monitor.savePaths": "Save paths",
@@ -46,6 +50,8 @@ const enTranslations: Record<string, string> = {
   "history.desc": "Clipboard history",
   "history.entries": "entries",
   "history.empty": "No history yet",
+  "history.emptyTitle": "No clipboard history yet",
+  "history.emptyGuide": "Captured clipboard entries will appear here.",
   "imported.desc": "Browse imported export symbols from the active KiCad library",
   "imported.title": "Imported Symbols",
   "imported.refresh": "Refresh",
@@ -61,6 +67,12 @@ const enTranslations: Record<string, string> = {
   "imported.actions": "Actions",
   "imported.loading": "Loading imported symbols...",
   "imported.empty": "No imported symbols found in the current export output library.",
+  "imported.emptyTitle": "No imported symbols yet",
+  "imported.emptyGuide":
+    "Export a component library or scan an external KiCad library to see symbols here.",
+  "imported.retry": "Retry scan",
+  "imported.loadErrorTitle": "Unable to load library",
+  "imported.loadErrorGuide": "Check the export directory or try scanning again.",
   "imported.noFilterResults": "No imported symbols match the current filter.",
   "imported.copyPart": "Copy LCSC Part",
   "imported.copied": "LCSC Part copied to clipboard.",
@@ -198,6 +210,12 @@ const enTranslations: Record<string, string> = {
   "inventory.save": "Save Part",
   "inventory.total": "Total",
   "inventory.empty": "No inventory parts yet.",
+  "inventory.emptyTitle": "No inventory parts yet",
+  "inventory.emptyGuide":
+    "Import matched IDs or add a component from the library to start tracking stock.",
+  "inventory.retry": "Retry loading",
+  "inventory.loadErrorTitle": "Unable to load inventory",
+  "inventory.loadErrorGuide": "The inventory store could not be read. Try loading again.",
   "inventory.bomTitle": "CSV Production Deduction",
   "inventory.preview": "Preview Deduction",
   "inventory.importBom": "Import BOM to Inventory",
@@ -275,8 +293,14 @@ const zhTranslations: Record<string, string> = {
   "monitor.show": "\u663e\u793a",
   "monitor.hide": "\u9690\u85cf",
   "monitor.noMatches": "\u6682\u65e0\u5339\u914d\u7ed3\u679c",
+  "monitor.noMatchesTitle": "\u6682\u65e0\u5339\u914d\u5143\u4ef6",
+  "monitor.noMatchesGuide":
+    "\u5c06 LCSC ID \u590d\u5236\u5230\u526a\u8d34\u677f\uff0c\u5373\u53ef\u52a0\u5165\u961f\u5217\u3002",
   "monitor.clipboard": "\u526a\u8d34\u677f",
   "monitor.waiting": "\u7b49\u5f85\u526a\u8d34\u677f\u5185\u5bb9...",
+  "monitor.waitingTitle": "\u7b49\u5f85\u526a\u8d34\u677f...",
+  "monitor.waitingGuide":
+    "\u590d\u5236\u5143\u4ef6\u8bf4\u660e\u6216 LCSC \u7f16\u53f7\u540e\u5f00\u59cb\u3002",
   "monitor.saveHistory": "\u4fdd\u5b58\u5386\u53f2",
   "monitor.exportMatched": "\u5bfc\u51fa\u5339\u914d",
   "monitor.savePaths": "\u4fdd\u5b58\u8def\u5f84",
@@ -295,6 +319,9 @@ const zhTranslations: Record<string, string> = {
   "history.desc": "\u526a\u8d34\u677f\u5386\u53f2",
   "history.entries": "\u6761",
   "history.empty": "\u6682\u65e0\u5386\u53f2\u8bb0\u5f55",
+  "history.emptyTitle": "\u6682\u65e0\u526a\u8d34\u677f\u5386\u53f2",
+  "history.emptyGuide":
+    "\u6355\u83b7\u5230\u7684\u526a\u8d34\u677f\u8bb0\u5f55\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002",
   "imported.desc":
     "\u67e5\u770b\u5f53\u524d export KiCad \u7b26\u53f7\u5e93\u4e2d\u5df2\u5bfc\u5165\u7684\u7b26\u53f7",
   "imported.title": "\u5df2\u5bfc\u5165\u7b26\u53f7",
@@ -313,6 +340,13 @@ const zhTranslations: Record<string, string> = {
   "imported.loading": "\u6b63\u5728\u52a0\u8f7d\u5df2\u5bfc\u5165\u7b26\u53f7...",
   "imported.empty":
     "\u5f53\u524d export \u8f93\u51fa\u7b26\u53f7\u5e93\u4e2d\u8fd8\u6ca1\u6709\u627e\u5230\u5df2\u5bfc\u5165\u7b26\u53f7\u3002",
+  "imported.emptyTitle": "\u6682\u65e0\u5df2\u5bfc\u5165\u7b26\u53f7",
+  "imported.emptyGuide":
+    "\u8bf7\u5148\u5bfc\u51fa\u5143\u4ef6\u5e93\uff0c\u6216\u626b\u63cf\u5916\u90e8 KiCad \u5143\u4ef6\u5e93\u3002",
+  "imported.retry": "\u91cd\u8bd5\u626b\u63cf",
+  "imported.loadErrorTitle": "\u65e0\u6cd5\u52a0\u8f7d\u5143\u4ef6\u5e93",
+  "imported.loadErrorGuide":
+    "\u8bf7\u68c0\u67e5\u5bfc\u51fa\u76ee\u5f55\uff0c\u6216\u91cd\u8bd5\u626b\u63cf\u3002",
   "imported.noFilterResults":
     "\u5f53\u524d\u7b5b\u9009\u6761\u4ef6\u4e0b\u6ca1\u6709\u5339\u914d\u7684\u5df2\u5bfc\u5165\u7b26\u53f7\u3002",
   "imported.copyPart": "\u590d\u5236 LCSC Part",
@@ -440,6 +474,13 @@ const zhTranslations: Record<string, string> = {
   "inventory.save": "\u4fdd\u5b58\u5143\u4ef6",
   "inventory.total": "\u603b\u91cf",
   "inventory.empty": "\u8fd8\u6ca1\u6709\u5e93\u5b58\u5143\u4ef6\u3002",
+  "inventory.emptyTitle": "\u6682\u65e0\u5e93\u5b58\u5143\u4ef6",
+  "inventory.emptyGuide":
+    "\u53ef\u5bfc\u5165\u5339\u914d ID \u6216\u4ece\u5143\u4ef6\u5e93\u6dfb\u52a0\u8bb0\u5f55\u3002",
+  "inventory.retry": "\u91cd\u8bd5\u52a0\u8f7d",
+  "inventory.loadErrorTitle": "\u65e0\u6cd5\u52a0\u8f7d\u5e93\u5b58",
+  "inventory.loadErrorGuide":
+    "\u5e93\u5b58\u6570\u636e\u65e0\u6cd5\u8bfb\u53d6\uff0c\u8bf7\u91cd\u8bd5\u52a0\u8f7d\u3002",
   "inventory.bomTitle": "CSV \u751f\u4ea7\u6263\u51cf\u9884\u89c8",
   "inventory.preview": "\u9884\u89c8\u6263\u51cf",
   "inventory.importBom": "\u5bfc\u5165 BOM \u5230\u5e93\u5b58",

@@ -274,7 +274,11 @@ function renderImportedPanel(): void {
   const path = $("imported-scanned-path");
   const feedback = $("imported-feedback");
   const table = $("imported-table");
+  const loadingSkeleton = $("imported-loading-skeleton");
   const empty = $("imported-empty");
+  const emptyTitle = $("imported-empty-title");
+  const emptyHint = $("imported-empty-hint");
+  const retryButton = $("btn-retry-imported") as HTMLButtonElement;
   const editorCard = $("imported-editor-card");
   const refreshButton = $("btn-refresh-imported") as HTMLButtonElement;
   const browseButton = $("btn-browse-imported-parts-save-path") as HTMLButtonElement;
@@ -369,17 +373,22 @@ function renderImportedPanel(): void {
 
   if (importedUi.loading) {
     table.classList.add("hidden");
-    empty.classList.remove("hidden");
-    empty.textContent = t("imported.loading");
-    return;
-  }
-
-  if (importedUi.error) {
-    table.classList.add("hidden");
+    loadingSkeleton.classList.remove("hidden");
     empty.classList.add("hidden");
     return;
   }
 
+  loadingSkeleton.classList.add("hidden");
+  if (importedUi.error) {
+    table.classList.add("hidden");
+    empty.classList.remove("hidden");
+    emptyTitle.textContent = t("imported.loadErrorTitle");
+    emptyHint.textContent = t("imported.loadErrorGuide");
+    retryButton.classList.remove("hidden");
+    return;
+  }
+
+  retryButton.classList.add("hidden");
   if (filteredItems.length > 0) {
     const listSignature = importedListSignature(filteredItems);
     if (listSignature !== lastImportedListSignature) {
@@ -393,14 +402,20 @@ function renderImportedPanel(): void {
 
   table.classList.add("hidden");
   empty.classList.remove("hidden");
-  empty.textContent =
-    importedUi.items.length > 0 ? t("imported.noFilterResults") : t("imported.empty");
+  if (importedUi.items.length > 0) {
+    emptyTitle.textContent = t("imported.noFilterResults");
+    emptyHint.textContent = t("imported.selectionHint");
+  } else {
+    emptyTitle.textContent = t("imported.emptyTitle");
+    emptyHint.textContent = t("imported.emptyGuide");
+  }
 }
 
 async function loadImportedSymbols(): Promise<void> {
   closeImportedPreview();
   closeImportedStandalonePreview();
   importedUi.loading = true;
+  importedUi.error = null;
   importedUi.notice = null;
   renderImportedPanel();
 
@@ -553,6 +568,11 @@ export function mount(nextContext: LibraryPageContext): void {
   $("btn-refresh-imported").addEventListener("click", async () => {
     if (importedUi.loading || importedUi.busy) return;
     importedUi.notice = null;
+    await loadImportedSymbols();
+  });
+
+  $("btn-retry-imported").addEventListener("click", async () => {
+    if (importedUi.loading || importedUi.busy) return;
     await loadImportedSymbols();
   });
 

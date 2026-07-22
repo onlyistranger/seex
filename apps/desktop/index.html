@@ -92,7 +92,10 @@
                   </div>
                 </div>
                 <div id="matched-list" class="scroll-area"></div>
-                <div id="matched-empty" class="empty-state" data-i18n="monitor.noMatches">No matches yet</div>
+                <div id="matched-empty" class="empty-state empty-state-rich">
+                  <i class="empty-state-icon" data-lucide="clipboard-paste"></i>
+                  <div class="empty-state-content"><strong data-i18n="monitor.noMatchesTitle">No matched parts yet</strong><span data-i18n="monitor.noMatchesGuide">Copy an LCSC ID to the clipboard to add it to the queue.</span></div>
+                </div>
               </div>
 
               <div class="panel monitor-clipboard-card">
@@ -106,7 +109,10 @@
                   <div id="latest-time" class="hint"></div>
                   <textarea id="latest-content" readonly rows="5"></textarea>
                 </div>
-                <div id="history-waiting" class="empty-state" data-i18n="monitor.waiting">Waiting for clipboard...</div>
+                <div id="history-waiting" class="empty-state empty-state-rich">
+                  <i class="empty-state-icon" data-lucide="clipboard-paste"></i>
+                  <div class="empty-state-content"><strong data-i18n="monitor.waitingTitle">Waiting for clipboard...</strong><span data-i18n="monitor.waitingGuide">Copy a component note or LCSC part to begin.</span></div>
+                </div>
               </div>
             </div>
 
@@ -119,7 +125,10 @@
                   <i class="panel-icon" data-lucide="history"></i>
                 </div>
                 <div id="history-list" class="scroll-area scroll-area-full"></div>
-                <div id="history-empty" class="empty-state" data-i18n="history.empty">No history yet</div>
+                <div id="history-empty" class="empty-state empty-state-rich">
+                  <i class="empty-state-icon" data-lucide="history"></i>
+                  <div class="empty-state-content"><strong data-i18n="history.emptyTitle">No clipboard history yet</strong><span data-i18n="history.emptyGuide">Captured clipboard entries will appear here.</span></div>
+                </div>
               </div>
 
             </div>
@@ -267,7 +276,11 @@
                 </div>
                 <div id="imported-list" class="scroll-area scroll-area-full imported-list"></div>
               </div>
-              <div id="imported-empty" class="empty-state" data-i18n="imported.empty">No imported symbols found in the current export output library.</div>
+              <div id="imported-loading-skeleton" class="skeleton-list hidden" aria-hidden="true"><span class="skeleton-line wide"></span><span class="skeleton-line medium"></span><span class="skeleton-line short"></span><span class="skeleton-line wide"></span></div>
+              <div id="imported-empty" class="empty-state empty-state-rich">
+                <i id="imported-empty-icon" class="empty-state-icon" data-lucide="library-big"></i>
+                <div class="empty-state-content"><strong id="imported-empty-title" data-i18n="imported.emptyTitle">No imported symbols yet</strong><span id="imported-empty-hint" data-i18n="imported.emptyGuide">Export a component library or scan an external KiCad library to see symbols here.</span><button id="btn-retry-imported" class="btn-outline btn-sm hidden" data-i18n="imported.retry">Retry scan</button></div>
+              </div>
               <div id="imported-feedback" class="msg msg-info hidden"></div>
             </div>
 
@@ -325,7 +338,11 @@
                 <div class="inventory-head"><span data-i18n="inventory.supplier">供应商编号</span><span data-i18n="inventory.name">名称</span><span data-i18n="inventory.package">封装 / 规格</span><span data-i18n="inventory.locations">库位</span><span data-i18n="inventory.total">总量</span><span data-i18n="imported.actions">操作</span></div>
                 <div id="inventory-list" class="scroll-area scroll-area-full"></div>
               </div>
-              <div id="inventory-empty" class="empty-state" data-i18n="inventory.empty">还没有库存元件。</div>
+              <div id="inventory-skeleton" class="skeleton-list hidden" aria-hidden="true"><span class="skeleton-line wide"></span><span class="skeleton-line medium"></span><span class="skeleton-line short"></span><span class="skeleton-line wide"></span></div>
+              <div id="inventory-empty" class="empty-state empty-state-rich">
+                <i id="inventory-empty-icon" class="empty-state-icon" data-lucide="package-open"></i>
+                <div class="empty-state-content"><strong id="inventory-empty-title" data-i18n="inventory.emptyTitle">No inventory parts yet</strong><span id="inventory-empty-hint" data-i18n="inventory.emptyGuide">Import matched IDs or add a component from the library to start tracking stock.</span><button id="btn-retry-inventory" class="btn-outline btn-sm hidden" data-i18n="inventory.retry">Retry loading</button></div>
+              </div>
             </div>
             <div id="inventory-bom-panel" class="panel inventory-bom-panel hidden">
               <div class="panel-header compact"><div><h2 data-i18n="inventory.bomTitle">CSV 生产扣减预览</h2></div><button class="btn-ghost btn-sm" id="btn-close-inventory-bom" title="关闭 CSV 扣减" data-i18n="imported.cancel">关闭</button></div>

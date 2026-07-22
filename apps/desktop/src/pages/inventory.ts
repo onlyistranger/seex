@@ -608,18 +608,37 @@ function renderInventory() {
     libraryStatus.className = "hint";
   }
   renderInventoryLocationFields();
+  const inventoryTable = $("inventory-table");
+  const inventorySkeleton = $("inventory-skeleton");
+  const inventoryEmpty = $("inventory-empty");
+  const inventoryEmptyTitle = $("inventory-empty-title");
+  const inventoryEmptyHint = $("inventory-empty-hint");
+  const retryInventoryButton = $("btn-retry-inventory") as HTMLButtonElement;
   if (inventoryUi.loading) {
-    $("inventory-table").classList.add("hidden");
-    $("inventory-empty").classList.remove("hidden");
-    $("inventory-empty").textContent = "Loading inventory...";
+    inventoryTable.classList.add("hidden");
+    inventorySkeleton.classList.remove("hidden");
+    inventoryEmpty.classList.add("hidden");
+    retryInventoryButton.classList.add("hidden");
+  } else if (inventoryUi.error) {
+    inventoryTable.classList.add("hidden");
+    inventorySkeleton.classList.add("hidden");
+    inventoryEmpty.classList.remove("hidden");
+    inventoryEmptyTitle.textContent = t("inventory.loadErrorTitle");
+    inventoryEmptyHint.textContent = t("inventory.loadErrorGuide");
+    retryInventoryButton.classList.remove("hidden");
   } else if (inventoryUi.parts.length > 0) {
+    inventorySkeleton.classList.add("hidden");
     renderInventoryList();
-    $("inventory-table").classList.remove("hidden");
-    $("inventory-empty").classList.add("hidden");
+    inventoryTable.classList.remove("hidden");
+    inventoryEmpty.classList.add("hidden");
+    retryInventoryButton.classList.add("hidden");
   } else {
-    $("inventory-table").classList.add("hidden");
-    $("inventory-empty").classList.remove("hidden");
-    $("inventory-empty").textContent = t("inventory.empty");
+    inventorySkeleton.classList.add("hidden");
+    inventoryTable.classList.add("hidden");
+    inventoryEmpty.classList.remove("hidden");
+    inventoryEmptyTitle.textContent = t("inventory.emptyTitle");
+    inventoryEmptyHint.textContent = t("inventory.emptyGuide");
+    retryInventoryButton.classList.add("hidden");
   }
   syncInventoryDraftInput("inventory-bom-path", inventoryUi.bomPath);
   syncInventoryDraftInput("inventory-bom-boards", inventoryUi.bomBoards);
@@ -874,6 +893,11 @@ export function mount(): void {
 
   $("inventory-search").addEventListener("input", () => {
     inventoryUi.query = ($("inventory-search") as HTMLInputElement).value;
+    void loadInventory();
+  });
+
+  $("btn-retry-inventory").addEventListener("click", () => {
+    if (inventoryUi.loading || inventoryUi.busy) return;
     void loadInventory();
   });
 

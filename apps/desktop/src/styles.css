@@ -656,6 +656,70 @@ textarea,
   font-size: 12px;
   text-align: center;
 }
+.empty-state-rich {
+  flex-direction: column;
+  gap: 8px;
+  min-height: 150px;
+}
+.empty-state-icon {
+  width: 26px;
+  height: 26px;
+  color: var(--primary);
+  opacity: 0.78;
+}
+.empty-state-content {
+  display: flex;
+  max-width: 440px;
+  align-items: center;
+  flex-direction: column;
+  gap: 4px;
+}
+.empty-state-content strong {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+.empty-state-content span {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.empty-state-content button {
+  margin-top: 6px;
+}
+.skeleton-list {
+  display: flex;
+  min-height: 170px;
+  padding: 24px 18px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 13px;
+}
+.skeleton-line {
+  display: block;
+  height: 12px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--surface-raised), #28313a, var(--surface-raised));
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.35s ease-in-out infinite;
+}
+.skeleton-line.wide {
+  width: 92%;
+}
+.skeleton-line.medium {
+  width: 70%;
+}
+.skeleton-line.short {
+  width: 48%;
+}
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
 .scroll-area {
   max-height: 210px;
   overflow: auto;
