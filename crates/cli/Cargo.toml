@@ -1,0 +1,25 @@
+[package]
+name = "happyjlc-cli"
+version = "0.1.0"
+edition = "2024"
+authors = ["Alddp"]
+publish = false
+description = "Command-line interface for the HappyJLC KiCad converter"
+license = "CC-BY-NC-4.0"
+repository = "https://github.com/Alddp/happyjlc"
+homepage = "https://github.com/Alddp/happyjlc"
+readme = "../../README.md"
+
+[[bin]]
+name = "happyjlc"
+path = "src/main.rs"
+
+[dependencies]
+happyjlc-core = { path = "../core" }
+clap = { version = "4.6.1", features = ["derive"] }
+env_logger = "0.11.10"
+chrono = "0.4.44"
+indicatif = "0.18.4"
+log = "0.4.29"
+regex = "1.12.3"
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"] }

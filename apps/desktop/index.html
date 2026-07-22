@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HappyJLC</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+
+  <body>
+    <div id="layout">
+      <nav id="sidebar" aria-label="应用导航">
+        <div class="sidebar-header">
+          <div class="brand-mark">S</div>
+          <div class="sidebar-brand-group">
+            <span class="sidebar-brand">HappyJLC</span>
+            <span class="sidebar-context">KiCad 元件工作台</span>
+          </div>
+          <button id="btn-collapse" class="sidebar-collapse icon-button" title="收起导航" aria-label="收起导航">
+            <i data-lucide="panel-left-close"></i>
+          </button>
+        </div>
+
+        <div class="sidebar-scroll">
+          <div class="nav-group">
+            <div class="nav-group-label">工作区</div>
+            <ul class="sidebar-nav">
+              <li class="nav-item active" data-page="monitor">
+                <i class="nav-icon" data-lucide="activity"></i>
+                <span class="nav-label" data-i18n="nav.monitor">Monitor</span>
+              </li>
+              <li class="nav-item" data-page="imported">
+                <i class="nav-icon" data-lucide="library-big"></i>
+                <span class="nav-label" data-i18n="nav.imported">Library</span>
+              </li>
+              <li class="nav-item" data-page="inventory">
+                <i class="nav-icon" data-lucide="package-open"></i>
+                <span class="nav-label" data-i18n="nav.inventory">库存</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="nav-group nav-group-system">
+            <div class="nav-group-label">系统</div>
+            <ul class="sidebar-nav">
+              <li class="nav-item" data-page="settings">
+                <i class="nav-icon" data-lucide="sliders-horizontal"></i>
+                <span class="nav-label" data-i18n="nav.settings">Settings</span>
+              </li>
+              <li class="nav-item" data-page="about">
+                <i class="nav-icon" data-lucide="circle-help"></i>
+                <span class="nav-label" data-i18n="nav.about">About</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+      </nav>
+
+      <div id="content-wrapper">
+        <section class="page active" id="page-monitor">
+          <header class="page-header page-header-workspace">
+            <div>
+              <div class="eyebrow">工作区 / 监听</div>
+              <h1 data-i18n="nav.monitor">Monitor</h1>
+            </div>
+            <div class="page-header-actions">
+              <button class="btn-monitor active has-tooltip" id="btn-toggle-monitor" data-tooltip="暂停或恢复剪贴板监听" data-i18n="monitor.monitoring">监听中</button>
+            </div>
+          </header>
+
+          <div class="page-body monitor-body">
+            <div class="monitor-intro">
+              <div class="monitor-intro-copy">自动监听剪贴板并提取 LCSC 元件编号。</div>
+              <div class="monitor-toolbar">
+                <span class="toolbar-label" data-i18n="monitor.matchMode">匹配模式</span>
+                <button class="btn-match active has-tooltip" id="btn-match-quick" data-tooltip="仅匹配单独出现的 C 开头 LCSC 编号" data-i18n="monitor.quickId">快速 ID</button>
+                <button class="btn-match active has-tooltip" id="btn-match-full" data-tooltip="匹配文本中的“编号: Cxxxx”格式" data-i18n="monitor.fullInfo">完整信息</button>
+              </div>
+            </div>
+
+            <div class="monitor-main-column">
+              <div class="panel panel-featured monitor-results-card">
+                <div class="panel-header">
+                  <div>
+                    <h2><span data-i18n="monitor.matched">Matched</span> <span class="badge" id="matched-count">0</span></h2>
+                  </div>
+                  <div class="panel-actions">
+                    <button class="btn-outline btn-sm" id="btn-copy-ids" title="复制当前匹配到的 LCSC 编号" data-i18n="monitor.copyIds">复制 ID</button>
+                    <button class="btn-pill active btn-sm" id="btn-toggle-matched" title="显示或隐藏当前匹配结果" data-i18n="monitor.show">显示</button>
+                  </div>
+                </div>
+                <div id="matched-list" class="scroll-area"></div>
+                <div id="matched-empty" class="empty-state" data-i18n="monitor.noMatches">No matches yet</div>
+              </div>
+
+              <div class="panel monitor-clipboard-card">
+                <div class="panel-header compact">
+                  <div>
+                    <h2 data-i18n="monitor.clipboard">Clipboard</h2>
+                  </div>
+                  <i class="panel-icon" data-lucide="clipboard-paste"></i>
+                </div>
+                <div id="latest-preview" class="latest-preview hidden">
+                  <div id="latest-time" class="hint"></div>
+                  <textarea id="latest-content" readonly rows="5"></textarea>
+                </div>
+                <div id="history-waiting" class="empty-state" data-i18n="monitor.waiting">Waiting for clipboard...</div>
+              </div>
+            </div>
+
+            <div class="monitor-side-column">
+              <div class="panel monitor-history-card history-browser-card">
+                <div class="panel-header">
+                  <div>
+                    <h2><span data-i18n="nav.history">History</span> <span class="badge" id="history-count-badge">0</span></h2>
+                  </div>
+                  <i class="panel-icon" data-lucide="history"></i>
+                </div>
+                <div id="history-list" class="scroll-area scroll-area-full"></div>
+                <div id="history-empty" class="empty-state" data-i18n="history.empty">No history yet</div>
+              </div>
+
+            </div>
+
+            <div class="monitor-export-section">
+              <div class="export-hero">
+                <div class="export-hero-mark"><i data-lucide="package-check"></i></div>
+                <div>
+                  <h2>导出 KiCad 元件库</h2>
+                  <p class="hint">根据匹配结果生成符号、封装和 3D 模型。</p>
+                </div>
+                <div class="spacer"></div>
+                <div class="export-hero-actions">
+                  <span class="header-stat"><strong id="export-count">0 项待导出</strong></span>
+                  <button class="btn-primary btn-large has-tooltip" id="btn-export" title="使用当前匹配结果生成 KiCad 元件库" disabled data-i18n="export.export">导出 HappyJLC</button>
+                </div>
+              </div>
+              <div class="export-status-panel">
+                <div class="status-panel-head">
+                  <strong>导出状态</strong>
+                  <span class="status-live-dot"></span>
+                </div>
+                <div id="export-progress" class="export-progress hidden" aria-live="polite">
+                  <div class="export-progress-head">
+                    <span id="export-progress-message" class="export-progress-message"></span>
+                    <span id="export-progress-meta" class="export-progress-meta"></span>
+                  </div>
+                  <div class="export-progress-track"><div id="export-progress-bar" class="export-progress-bar"></div></div>
+                </div>
+                <div id="export-status" class="msg msg-warn hidden"></div>
+                <div id="export-result" class="msg msg-info hidden"></div>
+              </div>
+              <div class="export-next-step">
+                <i data-lucide="arrow-right"></i>
+                <span>需要调整导出目录、3D 路径或覆盖策略？</span>
+                <button class="btn-ghost btn-sm" data-page="settings">打开设置</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="page-footer-wrap">
+            <div class="page-footer">
+              <button class="btn-outline" id="btn-save-history" data-i18n="monitor.saveHistory">Save History</button>
+              <button class="btn-outline" id="btn-save-matched" data-i18n="monitor.exportMatched">Export Matched</button>
+              <div class="spacer"></div>
+              <button class="btn-danger" id="btn-clear-all" data-i18n="monitor.clearAll">Clear All</button>
+              <span id="clear-confirm" class="hidden">
+                <span class="danger-text" data-i18n="monitor.sure">Sure?</span>
+                <button class="btn-danger btn-sm" id="btn-clear-confirm" data-i18n="monitor.yes">Yes</button>
+                <button class="btn-ghost btn-sm" id="btn-clear-cancel" data-i18n="monitor.no">No</button>
+              </span>
+            </div>
+            <div id="monitor-save-result" class="msg msg-info hidden"></div>
+          </div>
+        </section>
+
+        <section class="page" id="page-imported">
+          <header class="page-header page-header-workspace">
+            <div>
+              <div class="eyebrow">工作区 / 元件库</div>
+              <h1 data-i18n="nav.imported">Library</h1>
+              <p class="page-desc" data-i18n="imported.desc">Browse imported export symbols from the active KiCad library</p>
+            </div>
+            <div class="page-header-actions">
+              <button class="btn-outline" id="btn-refresh-imported" title="重新扫描当前 KiCad 元件库"><i data-lucide="refresh-cw"></i><span data-i18n="imported.refresh">刷新</span></button>
+            </div>
+          </header>
+
+          <div class="page-body imported-body">
+            <div class="library-toolbar">
+              <div class="library-search">
+                <i data-lucide="search"></i>
+                <input type="text" id="imported-search-input" data-i18n-placeholder="imported.searchPlaceholder" />
+              </div>
+              <select id="imported-source-filter" title="按元件库来源筛选" aria-label="按元件库来源筛选"><option value="">全部来源</option></select>
+              <div class="imported-stats">
+                <span class="stat-chip"><span data-i18n="imported.total">Total</span><strong id="imported-total-count">0</strong></span>
+                <span class="stat-chip"><span data-i18n="imported.filtered">Filtered</span><strong id="imported-filtered-count">0</strong></span>
+                <span class="stat-chip"><span data-i18n="imported.selected">Selected</span><strong id="imported-selected-count">0</strong></span>
+              </div>
+              <div class="spacer"></div>
+              <button class="btn-outline btn-sm" id="btn-select-imported-visible" data-i18n="imported.selectFiltered">Select Filtered</button>
+              <button class="btn-outline btn-sm" id="btn-clear-imported-selection" data-i18n="imported.clearSelection">Clear Selection</button>
+            </div>
+
+              <div class="library-path-line">
+                <i data-lucide="folder-search"></i>
+                <span id="imported-scanned-path" class="hint"></span>
+              </div>
+              <div id="imported-sources" class="library-sources"></div>
+
+            <div id="imported-editor-card" class="panel imported-editor-card hidden">
+              <div class="panel-header compact imported-editor-head">
+                <div>
+                  <h2 data-i18n="imported.editorTitle">Edit Imported Symbol</h2>
+                  <div class="panel-subtitle hint" data-i18n="imported.editorHint">Update the symbol name or LCSC Part directly in the KiCad symbol library.</div>
+                </div>
+                <button class="btn-ghost btn-sm" id="btn-cancel-imported-edit" data-i18n="imported.cancel">Cancel</button>
+              </div>
+              <div class="imported-editor-grid">
+                <div class="imported-control">
+                  <label class="hint" data-i18n="imported.editorSourceFile">Source file:</label>
+                  <div id="imported-editor-source-file" class="imported-editor-readonly"></div>
+                </div>
+                <div class="imported-control">
+                  <label class="hint" data-i18n="imported.editorSymbolName">Symbol Name:</label>
+                  <input type="text" id="imported-edit-symbol-name-input" />
+                </div>
+                <div class="imported-control">
+                  <label class="hint" data-i18n="imported.editorLcscPart">LCSC Part:</label>
+                  <input type="text" id="imported-edit-lcsc-part-input" />
+                </div>
+              </div>
+              <div class="row imported-editor-actions">
+                <button class="btn-primary btn-sm" id="btn-save-imported-edit" data-i18n="imported.save">Save</button>
+                <button class="btn-outline btn-sm" id="btn-cancel-imported-edit-secondary" data-i18n="imported.cancel">Cancel</button>
+              </div>
+            </div>
+
+            <div class="panel library-browser-card">
+              <div class="panel-header compact">
+                <div>
+                  <h2 data-i18n="imported.title">Imported Symbols</h2>
+                </div>
+                <div class="panel-actions">
+                  <button class="btn-outline btn-sm" id="btn-copy-imported-parts" data-i18n="imported.copyParts">Copy Parts</button>
+                  <button class="btn-outline btn-sm" id="btn-queue-imported-parts" data-i18n="imported.queueParts">Queue Parts</button>
+                  <button class="btn-primary btn-sm" id="btn-export-imported-parts" data-i18n="imported.exportParts">Export Parts</button>
+                </div>
+              </div>
+              <div id="imported-table" class="imported-table hidden">
+                <div class="imported-head">
+                  <span></span>
+                  <span data-i18n="imported.lcscPart">LCSC Part</span>
+                  <span data-i18n="imported.symbolName">Symbol Name</span>
+                  <span data-i18n="imported.package">Package</span>
+                  <span data-i18n="imported.actions">Actions</span>
+                </div>
+                <div id="imported-list" class="scroll-area scroll-area-full imported-list"></div>
+              </div>
+              <div id="imported-empty" class="empty-state" data-i18n="imported.empty">No imported symbols found in the current export output library.</div>
+              <div id="imported-feedback" class="msg msg-info hidden"></div>
+            </div>
+
+            <div class="library-footer-tools">
+              <div class="spacer"></div>
+              <button class="btn-outline" id="btn-add-kicad-library-file" title="选择一个或多个 .kicad_sym 或 .kicad_mod 文件，只读加入外部库索引" aria-label="选择 KiCad 外部库文件"><i data-lucide="file-plus-2"></i><span>添加库文件</span></button>
+              <button class="btn-outline" id="btn-add-kicad-library" title="选择一个 KiCad 外部库目录，递归只读扫描其中的库文件" aria-label="选择 KiCad 外部库目录"><i data-lucide="folder-plus"></i><span>添加库目录</span></button>
+              <button class="btn-outline" id="btn-scan-kicad-library" title="重新扫描 export 和已手动添加的外部库，不会自动发现 KiCad 库" aria-label="重新扫描已添加的 KiCad 外部库"><i data-lucide="refresh-cw"></i><span>重新扫描</span></button>
+              <button class="btn-outline" id="btn-import-imported-parts" data-i18n="imported.importParts">Import Parts</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-inventory">
+          <header class="page-header page-header-workspace">
+            <div>
+              <div class="eyebrow">工作区 / 库存</div>
+              <h1 data-i18n="nav.inventory">库存</h1>
+              <p class="page-desc" data-i18n="inventory.desc">管理元件数量、库位，并按 CSV 预览生产扣减。</p>
+            </div>
+            <div class="page-header-actions">
+              <span class="header-stat"><strong id="inventory-count">0</strong> <span data-i18n="inventory.parts">种元件</span></span>
+              <button class="btn-outline" id="btn-import-matched-inventory"><i data-lucide="clipboard-paste"></i><span data-i18n="inventory.importMatched">导入匹配结果</span></button>
+            </div>
+          </header>
+          <div class="page-body inventory-body">
+            <div class="inventory-toolbar">
+              <div class="library-search"><i data-lucide="search"></i><input id="inventory-search" type="text" data-i18n-placeholder="inventory.searchPlaceholder" /></div>
+              <button class="btn-primary" id="btn-new-inventory"><i data-lucide="plus"></i><span data-i18n="inventory.new">从元件库添加</span></button>
+              <button class="btn-outline" id="btn-browse-inventory-bom"><i data-lucide="file-spreadsheet"></i><span data-i18n="inventory.bom">CSV 扣减</span></button>
+            </div>
+            <div id="inventory-feedback" class="msg msg-info hidden"></div>
+            <div id="inventory-editor" class="panel inventory-editor hidden">
+              <div class="panel-header compact"><div><h2 data-i18n="inventory.editorTitle">元件信息</h2></div><button class="btn-ghost btn-sm" id="btn-cancel-inventory" title="放弃当前编辑" data-i18n="imported.cancel">取消</button></div>
+              <div class="inventory-form-grid">
+                <label><span class="hint" data-i18n="inventory.supplier">供应商编号 / LCSC</span><input id="inventory-supplier" type="text" readonly /></label>
+                <label><span class="hint" data-i18n="inventory.name">元件值</span><input id="inventory-name" type="text" readonly /></label>
+                <label><span class="hint" data-i18n="inventory.package">封装 / 规格</span><input id="inventory-package" type="text" readonly /></label>
+                <label><span class="hint" data-i18n="inventory.note">备注</span><input id="inventory-note" type="text" /></label>
+              </div>
+              <div class="inventory-library-link"><span id="inventory-library-status" class="hint"></span><button class="btn-outline btn-sm" id="btn-select-inventory-library"><i data-lucide="library-big"></i><span data-i18n="inventory.chooseLibrary">选择元件库记录</span></button></div>
+              <div class="inventory-location-editor">
+                <div class="panel-header compact"><div><h2 data-i18n="inventory.locations">库位</h2></div><button class="btn-outline btn-sm" id="btn-add-inventory-location"><i data-lucide="plus"></i><span data-i18n="inventory.addLocation">添加库位</span></button></div>
+                <div id="inventory-location-fields"></div>
+              </div>
+              <div class="row inventory-editor-actions"><div class="spacer"></div><button class="btn-primary" id="btn-save-inventory" data-i18n="inventory.save">保存元件</button></div>
+            </div>
+            <div id="inventory-library-picker" class="panel inventory-library-picker hidden">
+              <div class="panel-header compact"><div><h2 data-i18n="inventory.libraryPickerTitle">选择元件库记录</h2></div><button class="btn-ghost btn-sm" id="btn-close-inventory-library" title="关闭元件库选择" data-i18n="imported.cancel">取消</button></div>
+              <div class="library-search inventory-library-search"><i data-lucide="search"></i><input id="inventory-library-search" type="text" data-i18n-placeholder="inventory.librarySearchPlaceholder" /></div>
+              <div id="inventory-library-list" class="inventory-library-list"></div>
+            </div>
+            <div class="panel inventory-browser-card">
+              <div id="inventory-table" class="inventory-table hidden">
+                <div class="inventory-head"><span data-i18n="inventory.supplier">供应商编号</span><span data-i18n="inventory.name">名称</span><span data-i18n="inventory.package">封装 / 规格</span><span data-i18n="inventory.locations">库位</span><span data-i18n="inventory.total">总量</span><span data-i18n="imported.actions">操作</span></div>
+                <div id="inventory-list" class="scroll-area scroll-area-full"></div>
+              </div>
+              <div id="inventory-empty" class="empty-state" data-i18n="inventory.empty">还没有库存元件。</div>
+            </div>
+            <div id="inventory-bom-panel" class="panel inventory-bom-panel hidden">
+              <div class="panel-header compact"><div><h2 data-i18n="inventory.bomTitle">CSV 生产扣减预览</h2></div><button class="btn-ghost btn-sm" id="btn-close-inventory-bom" title="关闭 CSV 扣减" data-i18n="imported.cancel">关闭</button></div>
+              <div class="row inventory-bom-controls"><input id="inventory-bom-path" type="text" readonly title="已选择的 BOM CSV 文件" /><input id="inventory-bom-boards" type="text" value="1" aria-label="板数" title="需要生产的电路板数量" /><button class="btn-outline" id="btn-select-inventory-bom" data-i18n="export.browse">选择 CSV</button><button class="btn-primary has-tooltip" id="btn-preview-inventory-bom" title="读取 CSV 并计算每个元件的需求量" data-i18n="inventory.preview">预览扣减</button></div>
+              <div id="inventory-bom-feedback" class="msg msg-info hidden"></div>
+              <div id="inventory-bom-preview" class="inventory-bom-preview hidden"></div>
+              <div class="row inventory-bom-actions"><span class="hint" data-i18n="inventory.importBomHint">仅建立零库存记录，不会改变现有库存数量。</span><div class="spacer"></div><button class="btn-outline has-tooltip" id="btn-import-inventory-bom" disabled title="从当前 BOM 建立零库存记录，不会修改已有数量" aria-label="从当前 BOM 建立零库存记录，不会修改已有数量" data-i18n="inventory.importBom">导入到库存</button><button class="btn-primary has-tooltip" id="btn-confirm-inventory-bom" disabled title="按当前分配的库位和数量扣减库存并记录生产历史" aria-label="按当前分配的库位和数量扣减库存并记录生产历史" data-i18n="inventory.confirm">确认扣减</button></div>
+            </div>
+            <div id="inventory-production-panel" class="panel inventory-production-panel hidden">
+              <div class="panel-header compact"><div><h2 data-i18n="inventory.productionHistory">生产记录</h2></div></div>
+              <div id="inventory-production-records"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-settings">
+          <header class="page-header page-header-workspace">
+            <div>
+              <div class="eyebrow">系统 / 设置</div>
+              <h1 data-i18n="nav.settings">Settings</h1>
+              <p class="page-desc">配置导出行为和文件保存位置。</p>
+            </div>
+          </header>
+
+          <div class="page-body settings-body">
+            <div class="settings-grid">
+              <div class="settings-column">
+                <div class="panel settings-section">
+                  <div class="panel-header compact">
+                    <div>
+                      <h2>HappyJLC 导出</h2>
+                    </div>
+                    <i class="panel-icon" data-lucide="settings-2"></i>
+                  </div>
+                  <label class="hint setting-label" data-i18n="export.exportDir">Export directory:</label>
+                  <div class="row setting-row"><input type="text" id="export-path-input" /><button class="btn-outline btn-sm" id="btn-browse-export-folder" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-export-path" data-i18n="export.apply">Apply</button></div>
+                  <div class="setting-inline"><button class="btn-outline btn-sm" id="btn-toggle-export-terminal" title="内嵌核心始终在后台运行，不会打开外部终端窗口" data-i18n="export.toggleTerminal">后台运行</button><span id="export-terminal-status" class="hint"></span></div>
+                  <label class="hint setting-label" data-i18n="export.export3dPathMode">3D path mode:</label>
+                  <div class="segmented-row"><button class="btn-pill btn-sm" id="btn-export-3d-mode-auto" title="根据导出目录自动判断路径" data-i18n="export.export3dModeAuto">自动</button><button class="btn-pill btn-sm" id="btn-export-3d-mode-project" title="按 KiCad 项目位置生成相对路径" data-i18n="export.export3dModeProject">KiCad 项目</button><button class="btn-pill btn-sm" id="btn-export-3d-mode-library" title="按元件库位置生成相对路径" data-i18n="export.export3dModeLibrary">库相对</button></div>
+                  <div id="export-3d-mode-hint" class="hint setting-hint" data-i18n="export.export3dModeHint">Auto follows export directory detection. Choose an explicit mode to override KiCad 3D path generation.</div>
+                  <label class="hint setting-label has-tooltip" title="多个 3D 文件都存在时，预览优先使用的格式" data-i18n="export.defaultModelFormat">默认预览模型类型:</label>
+                  <div class="row setting-row"><select id="default-model-format-input" title="选择 3D 预览优先使用的文件格式"><option value="step" data-i18n="export.modelFormatStep">STEP</option><option value="stp" data-i18n="export.modelFormatStp">STP</option><option value="wrl" selected data-i18n="export.modelFormatWrl">WRL</option></select><button class="btn-primary btn-sm" id="btn-apply-default-model-format" data-i18n="export.apply">应用</button></div>
+                  <div class="hint setting-hint" data-i18n="export.defaultModelFormatHint">When several 3D files exist, the selected type opens first. If unavailable, the first available model is used.</div>
+                </div>
+
+                <div class="panel settings-section">
+                  <div class="panel-header compact"><div><h2>导出内容</h2></div><i class="panel-icon" data-lucide="layers-3"></i></div>
+                  <div class="export-toggle-group">
+                    <div class="export-toggle-row"><span class="hint export-toggle-title" data-i18n="export.content">导出内容:</span><div class="export-toggle-buttons"><button class="btn-pill btn-sm" id="btn-toggle-export-symbol" title="导出 KiCad 符号" data-i18n="export.exportAssetSymbol">Symbol</button><button class="btn-pill btn-sm" id="btn-toggle-export-footprint" title="导出 KiCad 封装" data-i18n="export.exportAssetFootprint">Footprint</button><button class="btn-pill btn-sm" id="btn-toggle-export-model-3d" title="导出 3D 模型" data-i18n="export.exportAssetModel3d">3D Model</button></div></div>
+                    <div class="export-toggle-row"><span class="hint export-toggle-title" data-i18n="export.exportOverwriteExisting">覆盖已存在:</span><div class="export-toggle-buttons"><button class="btn-pill btn-sm" id="btn-toggle-export-overwrite-symbol" title="覆盖已有 KiCad 符号" data-i18n="export.exportAssetSymbol">Symbol</button><button class="btn-pill btn-sm" id="btn-toggle-export-overwrite-footprint" title="覆盖已有 KiCad 封装" data-i18n="export.exportAssetFootprint">Footprint</button><button class="btn-pill btn-sm" id="btn-toggle-export-overwrite-model-3d" title="覆盖已有 3D 模型" data-i18n="export.exportAssetModel3d">3D Model</button></div></div>
+                  </div>
+                  <div class="hint setting-hint" data-i18n="export.exportOverwriteHint">Re-export can replace existing symbols in the KiCad symbol library when enabled.</div>
+                  <label class="hint setting-label has-tooltip" title="设置生成符号的填充颜色；留空使用 KiCad 默认值" data-i18n="export.exportFillColor">符号填充颜色:</label>
+                  <div class="row setting-row"><div class="color-input-wrap"><span id="export-symbol-fill-color-preview" class="color-swatch disabled" aria-hidden="true"></span><input type="text" id="export-symbol-fill-color-input" data-i18n-placeholder="export.exportFillColorPlaceholder" /></div><button class="btn-outline btn-sm" id="btn-clear-export-symbol-fill-color" data-i18n="export.exportFillColorClear">Clear</button><button class="btn-primary btn-sm" id="btn-apply-export-symbol-fill-color" data-i18n="export.apply">Apply</button></div>
+                  <div id="export-symbol-fill-color-status" class="hint setting-hint" data-i18n="export.exportFillColorAuto">No override</div><div id="export-symbol-fill-color-feedback" class="msg msg-error hidden"></div><div class="hint setting-hint" data-i18n="export.exportFillColorHint">Optional. Leave blank to keep export/KiCad defaults. Supports #RRGGBB or #RRGGBBAA.</div>
+                  <label class="hint setting-label has-tooltip" title="同时运行的 export 任务数；数值越高占用资源越多" data-i18n="export.parallel">并行任务数:</label>
+                  <div class="row setting-row"><input type="text" id="export-parallel-input" title="输入大于或等于 1 的并行任务数" /><button class="btn-primary btn-sm" id="btn-apply-export-parallel" data-i18n="export.apply">应用</button></div>
+                  <div class="hint setting-hint" data-i18n="export.exportParallelHint">export requires --parallel to be at least 1.</div>
+                </div>
+              </div>
+
+              <div class="settings-column">
+                <div class="panel settings-section">
+                  <div class="panel-header compact"><div><h2>文件保存位置</h2></div><i class="panel-icon" data-lucide="folder-cog"></i></div>
+                  <div class="path-field"><label class="hint" data-i18n="monitor.historySavePath">Save History file:</label><div class="row"><input type="text" id="history-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-history-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-history-save-path" data-i18n="export.apply">Apply</button></div></div>
+                  <div class="path-field"><label class="hint" data-i18n="monitor.matchedSavePath">Export Matched file:</label><div class="row"><input type="text" id="matched-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-matched-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-matched-save-path" data-i18n="export.apply">Apply</button></div></div>
+                  <div class="path-field"><label class="hint" data-i18n="imported.exportFile">Parts file:</label><div class="row"><input type="text" id="imported-parts-save-path-input" /><button class="btn-outline btn-sm" id="btn-browse-imported-parts-save-path" data-i18n="export.browse">Browse</button><button class="btn-primary btn-sm" id="btn-apply-imported-parts-save-path" data-i18n="export.apply">Apply</button></div></div>
+                  <div class="hint setting-hint" data-i18n="monitor.savePathsExample">Example: C:\Users\xxx\Documents\history.txt</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-about">
+          <header class="page-header page-header-workspace"><div><div class="eyebrow">系统 / 关于</div><h1 data-i18n="nav.about">关于</h1></div></header>
+          <div class="page-body about-body"><div class="about-layout"><div class="about-logo-wrap"><img src="/src/assets/happyjlc.svg" alt="HappyJLC" class="about-logo" /></div><div class="about-info"><div class="section-kicker">HappyJLC 桌面工具</div><h2>HappyJLC</h2><p class="about-tagline" data-i18n="about.tagline">剪贴板事件追踪器</p><p class="about-version">v0.1.0</p><p class="about-desc" data-i18n="about.desc">实时监听剪贴板，提取元件 ID，并生成 KiCad 元件库。</p><div class="about-tech-row"><div class="tech-chip" data-url="https://github.com/Alddp/happyjlc"><span>HappyJLC</span></div><div class="tech-chip" data-url="https://tauri.app"><img src="/src/assets/tauri.svg" alt="" /><span>Tauri</span></div><div class="tech-chip" data-url="https://www.rust-lang.org"><img src="/src/assets/rust.svg" alt="" /><span>Rust</span></div><div class="tech-chip" data-url="https://www.typescriptlang.org"><img src="/src/assets/typescript.svg" alt="" /><span>TypeScript</span></div><div class="tech-chip" data-url="https://vite.dev"><img src="/src/assets/vite.svg" alt="" /><span>Vite</span></div></div><p class="about-platform">Windows · macOS · Linux</p></div></div></div>
+        </section>
+      </div>
+    </div>
+
+    <div id="imported-preview-popover" class="model-preview-popover hidden" aria-hidden="true">
+      <div class="preview-popover-head">
+        <div class="preview-popover-title-wrap">
+          <span class="preview-popover-kicker">3D PREVIEW</span>
+          <strong id="imported-preview-title"></strong>
+          <span id="imported-preview-meta" class="hint"></span>
+        </div>
+        <span id="imported-preview-format" class="preview-format"></span>
+      </div>
+      <div id="imported-preview-canvas" class="model-preview-canvas-host"></div>
+      <div id="imported-preview-status" class="model-preview-status hidden"></div>
+    </div>
+
+    <div id="imported-standalone-preview-modal" class="model-preview-modal hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="imported-standalone-preview-title">
+      <div class="model-preview-dialog">
+        <aside class="model-preview-sidebar">
+          <div class="preview-brand"><span class="brand-mark small">S</span><span>3D 预览</span></div>
+          <div class="preview-heading"><div class="section-kicker">模型检查</div><div id="imported-standalone-preview-title" class="preview-title"></div><div id="imported-standalone-preview-meta" class="hint"></div></div>
+          <div class="preview-control-group"><label for="imported-standalone-preview-model-select" data-i18n="imported.previewModel">模型:</label><select id="imported-standalone-preview-model-select"></select></div>
+          <div class="preview-file-note"><i data-lucide="box"></i><span>可交互的 3D 视图</span></div>
+          <div class="spacer"></div>
+          <button id="btn-reset-imported-standalone-preview" class="btn-outline preview-action"><i data-lucide="rotate-ccw"></i><span data-i18n="imported.previewReset">Reset View</span></button>
+          <button id="btn-close-imported-standalone-preview" class="btn-ghost preview-action"><i data-lucide="x"></i><span data-i18n="imported.previewClose">Close</span></button>
+        </aside>
+        <main class="model-preview-stage"><div class="stage-topbar"><span class="stage-label">3D 视图</span><span class="stage-hint">拖动旋转，滚轮缩放</span></div><div id="imported-standalone-preview-canvas" class="model-preview-canvas-host standalone-preview-canvas-host"></div><div id="imported-standalone-preview-status" class="model-preview-status hidden"></div></main>
+      </div>
+    </div>
+
+    <footer id="status-bar">
+      <div class="status-cluster"><span class="status-bar-label" data-i18n="status.keyword">关键词:</span><span id="status-keyword">无</span></div>
+      <div class="status-cluster"><span class="status-bar-label">队列</span><span id="status-counts">历史 0 · 匹配 0</span></div>
+      <div class="spacer"></div>
+      <button class="status-toggle" id="status-listening" title="剪贴板监听服务状态"><span class="status-dot-icon"></span><span data-i18n="status.listening">监听中</span></button>
+      <button class="status-toggle" id="btn-toggle-always-on-top" title="切换窗口是否保持在其他窗口上方" data-i18n="status.alwaysOnTopOff">窗口置顶: 关</button>
+    </footer>
+  </body>
+</html>

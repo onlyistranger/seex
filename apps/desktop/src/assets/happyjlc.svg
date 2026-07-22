@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">HappyJLC</title>
+  <desc id="desc">A KiCad component chip with an export arrow.</desc>
+  <rect width="512" height="512" rx="112" fill="#102f3f"/>
+
+  <g fill="none" stroke="#55c2c8" stroke-linecap="round" stroke-width="18">
+    <path d="M112 168H72M112 256H72M112 344H72M400 168h40M400 256h40M400 344h40"/>
+    <path d="M168 112V72M256 112V72M344 112V72M168 400v40M256 400v40M344 400v40"/>
+  </g>
+
+  <rect x="112" y="112" width="288" height="288" rx="34" fill="#f7f3ea"/>
+  <rect x="151" y="151" width="210" height="210" rx="20" fill="#dceff0"/>
+
+  <path d="M188 300V212l68-42 68 42v88" fill="none" stroke="#17627a" stroke-linejoin="round" stroke-width="24"/>
+  <path d="M222 300v-48h68v48" fill="none" stroke="#17627a" stroke-linejoin="round" stroke-width="24"/>
+
+  <path d="M320 334l86-86" fill="none" stroke="#f06b5d" stroke-linecap="round" stroke-width="28"/>
+  <path d="M353 248h53v53" fill="none" stroke="#f06b5d" stroke-linecap="round" stroke-linejoin="round" stroke-width="28"/>
+</svg>

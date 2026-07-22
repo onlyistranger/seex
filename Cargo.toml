@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/cli",
+    "apps/desktop/src-tauri",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Alddp"]
+license = "CC-BY-NC-4.0"
+repository = "https://github.com/Alddp/happyjlc"
+homepage = "https://github.com/Alddp/happyjlc"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
