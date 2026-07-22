@@ -2,10 +2,22 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ModelPreviewViewer, type ModelFormat } from "./model-preview";
+import type { ModelFormat } from "./model-preview";
 import { mountIcons } from "./icons";
 import { errorMessage, invokeState } from "./ipc";
 import { translate } from "./i18n";
+import {
+  closeImportedPreview,
+  closeImportedStandalonePreview,
+  importedRowKey,
+  openImportedStandalonePreview,
+  positionImportedPreview,
+  resetImportedStandalonePreview,
+  scheduleImportedPreview,
+  selectImportedStandalonePreviewModel,
+  setNoModelsHandler,
+  setPreviewContext,
+} from "./shared/preview";
 import {
   $,
   applyTooltips,
@@ -47,7 +59,6 @@ import type {
 } from "./types";
 
 const browserPreviewMode = !("__TAURI_INTERNALS__" in window);
-
 
 const export3dModes: { id: string; value: Export3dPathMode }[] = [
   { id: "btn-export-3d-mode-auto", value: "auto" },
@@ -94,7 +105,14 @@ let matchQuick = true;
 let matchFull = true;
 let lastState: AppState | null = null;
 
-const exportUi: Record<ExportTool, { progress: ExportProgressState | null; notice: ExportNotice | null; resultKind: ExportMessageKind }> = {
+const exportUi: Record<
+  ExportTool,
+  {
+    progress: ExportProgressState | null;
+    notice: ExportNotice | null;
+    resultKind: ExportMessageKind;
+  }
+> = {
   export: { progress: null, notice: null, resultKind: "info" },
 };
 
@@ -137,40 +155,6 @@ const importedUi: {
   editDraftLcscPart: "",
   editDraftSourceFile: "",
 };
-
-const importedPreviewUi: {
-  itemKey: string | null;
-  item: ImportedSymbol | null;
-  fileName: string;
-  loading: boolean;
-  error: string | null;
-} = {
-  itemKey: null,
-  item: null,
-  fileName: "",
-  loading: false,
-  error: null,
-};
-
-let importedPreviewViewer: ModelPreviewViewer | null = null;
-let importedPreviewHoverTimer: number | null = null;
-let importedPreviewRow: HTMLElement | null = null;
-
-const importedStandalonePreviewUi: {
-  itemKey: string | null;
-  item: ImportedSymbol | null;
-  fileName: string;
-  loading: boolean;
-  error: string | null;
-} = {
-  itemKey: null,
-  item: null,
-  fileName: "",
-  loading: false,
-  error: null,
-};
-
-let importedStandalonePreviewViewer: ModelPreviewViewer | null = null;
 
 const inventoryUi: {
   initialized: boolean;
@@ -245,7 +229,8 @@ function normalizeExport3dPathMode(value: unknown): Export3dPathMode | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase().replace(/[-\s]/g, "_");
   if (normalized === "auto") return "auto";
-  if (["project_relative", "project", "kicad_project"].includes(normalized)) return "project_relative";
+  if (["project_relative", "project", "kicad_project"].includes(normalized))
+    return "project_relative";
   if (["library_relative", "library", "relative"].includes(normalized)) return "library_relative";
   return null;
 }
@@ -258,318 +243,35 @@ function normalizeImportedLcscPart(value: string): string {
   return value.trim().toUpperCase();
 }
 
-function importedRowKey(item: ImportedSymbol): string {
-  return item.library_key || `${item.source_file}\u001f${item.symbol_name}\u001f${item.lcsc_part}`;
-}
-
 function inventoryLibraryItem(part: InventoryPart): ImportedSymbol | null {
   const lcscPart = part.library_lcsc;
   if (!lcscPart && (!part.library_source_file || !part.library_symbol_name)) return null;
   return (
-    (lcscPart ? inventoryUi.libraryItems.find(
-      (item) => item.lcsc_part === lcscPart && item.source_file === part.library_source_file,
-    ) ?? inventoryUi.libraryItems.find((item) => item.lcsc_part === lcscPart) : null) ??
-    inventoryUi.libraryItems.find((item) => item.source_file === part.library_source_file && item.symbol_name === part.library_symbol_name) ??
+    (lcscPart
+      ? (inventoryUi.libraryItems.find(
+          (item) => item.lcsc_part === lcscPart && item.source_file === part.library_source_file,
+        ) ?? inventoryUi.libraryItems.find((item) => item.lcsc_part === lcscPart))
+      : null) ??
+    inventoryUi.libraryItems.find(
+      (item) =>
+        item.source_file === part.library_source_file &&
+        item.symbol_name === part.library_symbol_name,
+    ) ??
     null
   );
 }
 
-function formatModelSize(sizeBytes: number): string {
-  if (sizeBytes < 1024) return `${sizeBytes} B`;
-  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
-  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function librarySourceLabel(kind: string): string {
-  return ({
-    export: "export",
-    kicad_standard: "KiCad 标准库",
-    project: "项目库",
-    external: "外部库",
-  } as Record<string, string>)[kind] ?? kind;
-}
-
-function renderImportedPreview() {
-  const popover = $("imported-preview-popover");
-  const item = importedPreviewUi.item;
-  if (!item) {
-    popover.classList.add("hidden");
-    popover.setAttribute("aria-hidden", "true");
-    return;
-  }
-
-  popover.classList.remove("hidden");
-  popover.setAttribute("aria-hidden", "false");
-  $("imported-preview-title").textContent = `${t("imported.previewTitle")} · ${item.symbol_name}`;
-  $("imported-preview-meta").textContent = `${item.lcsc_part} · ${item.source_file}`;
-  const model = item.models.find((candidate) => candidate.file_name === importedPreviewUi.fileName) ?? item.models[0];
-  $("imported-preview-format").textContent = `${model.format.toUpperCase()} · ${formatModelSize(model.size_bytes)}`;
-
-  const status = $("imported-preview-status");
-  if (importedPreviewUi.loading) {
-    status.textContent = t("imported.previewLoading");
-    status.className = "model-preview-status";
-  } else if (importedPreviewUi.error) {
-    status.textContent = `${t("imported.previewError")} ${importedPreviewUi.error}`;
-    status.className = "model-preview-status model-preview-status-error";
-  } else {
-    status.textContent = "";
-    status.className = "model-preview-status hidden";
-  }
-
-  positionImportedPreview();
-}
-
-function closeImportedPreview() {
-  if (importedPreviewHoverTimer !== null) {
-    window.clearTimeout(importedPreviewHoverTimer);
-    importedPreviewHoverTimer = null;
-  }
-  importedPreviewViewer?.dispose();
-  importedPreviewViewer = null;
-  importedPreviewRow = null;
-  importedPreviewUi.itemKey = null;
-  importedPreviewUi.item = null;
-  importedPreviewUi.fileName = "";
-  importedPreviewUi.loading = false;
-  importedPreviewUi.error = null;
-  renderImportedPreview();
-}
-
-function positionImportedPreview() {
-  const popover = $("imported-preview-popover");
-  if (!importedPreviewUi.item || !importedPreviewRow || popover.classList.contains("hidden")) {
-    return;
-  }
-
-  const rowRect = importedPreviewRow.getBoundingClientRect();
-  const popoverRect = popover.getBoundingClientRect();
-  const margin = 12;
-  const gap = 12;
-  let left = rowRect.right + gap;
-  if (left + popoverRect.width > window.innerWidth - margin) {
-    left = rowRect.left - popoverRect.width - gap;
-  }
-  left = Math.max(margin, Math.min(left, window.innerWidth - popoverRect.width - margin));
-
-  let top = rowRect.top;
-  if (top + popoverRect.height > window.innerHeight - margin) {
-    top = window.innerHeight - popoverRect.height - margin;
-  }
-  top = Math.max(margin, top);
-
-  popover.style.left = `${left}px`;
-  popover.style.top = `${top}px`;
-}
-
-async function loadImportedPreviewModel() {
-  const item = importedPreviewUi.item;
-  const fileName = importedPreviewUi.fileName;
-  const viewer = importedPreviewViewer;
-  if (!item || !fileName || !viewer) {
-    return;
-  }
-
-  const itemKey = importedPreviewUi.itemKey;
-  const model = item.models.find((candidate) => candidate.file_name === fileName);
-  if (!model) {
-    importedPreviewUi.error = t("imported.previewNoModels");
-    renderImportedPreview();
-    return;
-  }
-
-  importedPreviewUi.loading = true;
-  importedPreviewUi.error = null;
-  renderImportedPreview();
-
-  try {
-    const bytes = await invoke<number[]>("read_imported_model", {
-      request: {
-        source_file: item.source_file,
-        lcsc_part: item.lcsc_part,
-        file_name: model.file_name,
-      },
-    });
-    if (importedPreviewUi.itemKey !== itemKey || importedPreviewViewer !== viewer) {
-      return;
-    }
-    await viewer.load(model.format, new Uint8Array(bytes));
-  } catch (error) {
-    if (importedPreviewUi.itemKey === itemKey && importedPreviewViewer === viewer) {
-      importedPreviewUi.error = errorMessage(error);
-    }
-  } finally {
-    if (importedPreviewUi.itemKey === itemKey && importedPreviewViewer === viewer) {
-      importedPreviewUi.loading = false;
-      renderImportedPreview();
-    }
-  }
-}
-
-function scheduleImportedPreview(item: ImportedSymbol, row: HTMLElement) {
-  if (item.models.length === 0) {
-    closeImportedPreview();
-    return;
-  }
-
-  const itemKey = importedRowKey(item);
-  if (importedPreviewUi.itemKey !== itemKey) {
-    closeImportedPreview();
-    importedPreviewRow = row;
-    importedPreviewUi.itemKey = itemKey;
-    importedPreviewUi.item = item;
-    const preferredModel = item.models.find(
-      (model) => model.format === (lastState?.default_model_format ?? "wrl"),
-    );
-    importedPreviewUi.fileName = (preferredModel ?? item.models[0]).file_name;
-    importedPreviewUi.loading = true;
-    importedPreviewUi.error = null;
-    renderImportedPreview();
-
-    try {
-      importedPreviewViewer = new ModelPreviewViewer($("imported-preview-canvas"));
-    } catch (error) {
-      importedPreviewUi.loading = false;
-      importedPreviewUi.error = errorMessage(error);
-      renderImportedPreview();
-      return;
-    }
-  } else {
-    importedPreviewRow = row;
-    positionImportedPreview();
-  }
-
-  if (importedPreviewHoverTimer !== null) {
-    window.clearTimeout(importedPreviewHoverTimer);
-  }
-  importedPreviewHoverTimer = window.setTimeout(() => {
-    importedPreviewHoverTimer = null;
-    void loadImportedPreviewModel();
-  }, 120);
-}
-
-function renderImportedStandalonePreview() {
-  const modal = $("imported-standalone-preview-modal");
-  const item = importedStandalonePreviewUi.item;
-  if (!item) {
-    modal.classList.add("hidden");
-    modal.setAttribute("aria-hidden", "true");
-    return;
-  }
-
-  modal.classList.remove("hidden");
-  modal.setAttribute("aria-hidden", "false");
-  $("imported-standalone-preview-title").textContent = `${t("imported.previewTitle")} · ${item.symbol_name}`;
-  $("imported-standalone-preview-meta").textContent = `${item.lcsc_part} · ${item.source_file}`;
-
-  const select = $("imported-standalone-preview-model-select") as HTMLSelectElement;
-  select.replaceChildren();
-  item.models.forEach((model) => {
-    const option = document.createElement("option");
-    option.value = model.file_name;
-    option.textContent = `${model.file_name} (${formatModelSize(model.size_bytes)})`;
-    option.selected = model.file_name === importedStandalonePreviewUi.fileName;
-    select.appendChild(option);
-  });
-  select.disabled = importedStandalonePreviewUi.loading || item.models.length < 2;
-
-  const status = $("imported-standalone-preview-status");
-  if (importedStandalonePreviewUi.loading) {
-    status.textContent = t("imported.previewLoading");
-    status.className = "model-preview-status";
-  } else if (importedStandalonePreviewUi.error) {
-    status.textContent = `${t("imported.previewError")} ${importedStandalonePreviewUi.error}`;
-    status.className = "model-preview-status model-preview-status-error";
-  } else {
-    status.textContent = "";
-    status.className = "model-preview-status hidden";
-  }
-
-  ($("btn-reset-imported-standalone-preview") as HTMLButtonElement).disabled = importedStandalonePreviewUi.loading;
-}
-
-function closeImportedStandalonePreview() {
-  importedStandalonePreviewViewer?.dispose();
-  importedStandalonePreviewViewer = null;
-  importedStandalonePreviewUi.itemKey = null;
-  importedStandalonePreviewUi.item = null;
-  importedStandalonePreviewUi.fileName = "";
-  importedStandalonePreviewUi.loading = false;
-  importedStandalonePreviewUi.error = null;
-  renderImportedStandalonePreview();
-}
-
-async function loadImportedStandalonePreviewModel() {
-  const item = importedStandalonePreviewUi.item;
-  const fileName = importedStandalonePreviewUi.fileName;
-  const viewer = importedStandalonePreviewViewer;
-  if (!item || !fileName || !viewer) {
-    return;
-  }
-
-  const itemKey = importedStandalonePreviewUi.itemKey;
-  const model = item.models.find((candidate) => candidate.file_name === fileName);
-  if (!model) {
-    importedStandalonePreviewUi.error = t("imported.previewNoModels");
-    renderImportedStandalonePreview();
-    return;
-  }
-
-  importedStandalonePreviewUi.loading = true;
-  importedStandalonePreviewUi.error = null;
-  renderImportedStandalonePreview();
-
-  try {
-    const bytes = await invoke<number[]>("read_imported_model", {
-      request: {
-        source_file: item.source_file,
-        lcsc_part: item.lcsc_part,
-        file_name: model.file_name,
-      },
-    });
-    if (importedStandalonePreviewUi.itemKey !== itemKey || importedStandalonePreviewViewer !== viewer) {
-      return;
-    }
-    await viewer.load(model.format, new Uint8Array(bytes));
-  } catch (error) {
-    if (importedStandalonePreviewUi.itemKey === itemKey && importedStandalonePreviewViewer === viewer) {
-      importedStandalonePreviewUi.error = errorMessage(error);
-    }
-  } finally {
-    if (importedStandalonePreviewUi.itemKey === itemKey && importedStandalonePreviewViewer === viewer) {
-      importedStandalonePreviewUi.loading = false;
-      renderImportedStandalonePreview();
-    }
-  }
-}
-
-async function openImportedStandalonePreview(item: ImportedSymbol) {
-  if (item.models.length === 0) {
-    importedUi.notice = { kind: "warn", message: t("imported.previewNoModels") };
-    renderImportedPanel();
-    return;
-  }
-
-  closeImportedPreview();
-  closeImportedStandalonePreview();
-  importedStandalonePreviewUi.itemKey = importedRowKey(item);
-  importedStandalonePreviewUi.item = item;
-  const preferredModel = item.models.find(
-    (model) => model.format === (lastState?.default_model_format ?? "wrl"),
+  return (
+    (
+      {
+        export: "export",
+        kicad_standard: "KiCad 标准库",
+        project: "项目库",
+        external: "外部库",
+      } as Record<string, string>
+    )[kind] ?? kind
   );
-  importedStandalonePreviewUi.fileName = (preferredModel ?? item.models[0]).file_name;
-  importedStandalonePreviewUi.loading = true;
-  importedStandalonePreviewUi.error = null;
-  renderImportedStandalonePreview();
-
-  try {
-    importedStandalonePreviewViewer = new ModelPreviewViewer($("imported-standalone-preview-canvas"));
-    await loadImportedStandalonePreviewModel();
-  } catch (error) {
-    importedStandalonePreviewUi.loading = false;
-    importedStandalonePreviewUi.error = errorMessage(error);
-    renderImportedStandalonePreview();
-  }
 }
 
 function dedupeImportedParts(items: ImportedSymbol[]): string[] {
@@ -586,7 +288,14 @@ function filteredImportedItems(): ImportedSymbol[] {
     const sourceMatches = !importedUi.sourceFilter || item.source_kind === importedUi.sourceFilter;
     if (!sourceMatches) return false;
     if (!query) return true;
-    return [item.lcsc_part, item.symbol_name, item.package, item.value, item.source_file, item.source_kind]
+    return [
+      item.lcsc_part,
+      item.symbol_name,
+      item.package,
+      item.value,
+      item.source_file,
+      item.source_kind,
+    ]
       .join(" ")
       .toLowerCase()
       .includes(query);
@@ -609,11 +318,15 @@ function importedItemByKey(key: string | null): ImportedSymbol | null {
 }
 
 function activeImportedParts(): string[] {
-  const selected = dedupeImportedParts(selectedImportedItems().filter((item) => item.source_kind === "export"));
+  const selected = dedupeImportedParts(
+    selectedImportedItems().filter((item) => item.source_kind === "export"),
+  );
   if (selected.length > 0) {
     return selected;
   }
-  return dedupeImportedParts(filteredImportedItems().filter((item) => item.source_kind === "export"));
+  return dedupeImportedParts(
+    filteredImportedItems().filter((item) => item.source_kind === "export"),
+  );
 }
 
 function pruneImportedSelection() {
@@ -667,10 +380,10 @@ function applyStaticTranslations() {
 }
 
 function switchPage(pageName: PageName) {
-  if (pageName !== "imported" && importedPreviewUi.item) {
+  if (pageName !== "imported") {
     closeImportedPreview();
   }
-  if (pageName !== "imported" && importedStandalonePreviewUi.item) {
+  if (pageName !== "imported") {
     closeImportedStandalonePreview();
   }
   currentPage = pageName;
@@ -713,7 +426,11 @@ function rerenderState() {
   }
 }
 
-function setExportNotice(tool: ExportTool, message: string | null, kind: ExportMessageKind = "warn") {
+function setExportNotice(
+  tool: ExportTool,
+  message: string | null,
+  kind: ExportMessageKind = "warn",
+) {
   exportUi[tool].notice = message ? { kind, message } : null;
   rerenderState();
 }
@@ -775,7 +492,9 @@ function renderExportProgress(tool: ExportTool, running: boolean, fallbackMessag
 
   const determinate = progress.determinate && progress.total > 0;
   const current = determinate ? Math.min(progress.current, progress.total) : 0;
-  const width = determinate ? `${Math.max(8, Math.round((current / progress.total) * 100))}%` : "42%";
+  const width = determinate
+    ? `${Math.max(8, Math.round((current / progress.total) * 100))}%`
+    : "42%";
 
   container.classList.remove("hidden");
   container.classList.toggle("indeterminate", !determinate);
@@ -803,7 +522,8 @@ function renderExportAssetToggles(state: AppState): boolean {
     const exportButton = $(toggle.exportButtonId) as HTMLButtonElement;
     const overwriteButton = $(toggle.overwriteButtonId) as HTMLButtonElement;
     const exportEnabledForAsset = exportEnabled(state, toggle.exportField);
-    const overwriteEnabled = exportEnabledForAsset && exportOverwriteEnabled(state, toggle.overwriteField);
+    const overwriteEnabled =
+      exportEnabledForAsset && exportOverwriteEnabled(state, toggle.overwriteField);
 
     exportButton.classList.toggle("active", exportEnabledForAsset);
     exportButton.setAttribute("aria-pressed", String(exportEnabledForAsset));
@@ -829,7 +549,12 @@ function renderExportNotice(tool: ExportTool, derivedNotice: ExportNotice | null
   status.className = `msg ${messageClass(notice.kind)}`;
 }
 
-function renderExportResult(tool: ExportTool, result: string | null, busy: boolean, derivedNotice: ExportNotice | null = null) {
+function renderExportResult(
+  tool: ExportTool,
+  result: string | null,
+  busy: boolean,
+  derivedNotice: ExportNotice | null = null,
+) {
   const resultBox = $(toolElementId(tool, "result"));
   if (!result || busy || exportUi[tool].notice !== null || derivedNotice !== null) {
     resultBox.textContent = "";
@@ -926,7 +651,9 @@ function renderState(state: AppState) {
   syncInputValue("imported-parts-save-path-input", state.imported_parts_save_path);
   syncSelectValue("default-model-format-input", state.default_model_format);
 
-  $("export-terminal-status").textContent = state.export_show_terminal ? t("export.terminalOn") : t("export.terminalOff");
+  $("export-terminal-status").textContent = state.export_show_terminal
+    ? t("export.terminalOn")
+    : t("export.terminalOff");
   const exportHasExportSelection = renderExportAssetToggles(state);
   renderExport3dMode();
   renderExportFillColorDraft();
@@ -1035,9 +762,7 @@ function renderHistoryList(items: [string, string][]) {
 }
 
 function renderImportedList(items: ImportedSymbol[]) {
-  if (importedPreviewUi.item) {
-    closeImportedPreview();
-  }
+  closeImportedPreview();
   const copyLabel = t("monitor.copy");
   const copyTitle = t("imported.copyPart");
   const queueLabel = t("imported.queuePart");
@@ -1051,9 +776,12 @@ function renderImportedList(items: ImportedSymbol[]) {
     const key = importedRowKey(item);
     const checked = importedUi.selectedKeys.has(key);
     const canPreview = item.source_kind === "export" && item.models.length > 0;
-    const previewTitle = item.source_kind === "export"
-      ? (canPreview ? previewLabel : t("imported.previewNoModels"))
-      : "外部库只读，仅显示 3D 模型状态，暂不支持预览";
+    const previewTitle =
+      item.source_kind === "export"
+        ? canPreview
+          ? previewLabel
+          : t("imported.previewNoModels")
+        : "外部库只读，仅显示 3D 模型状态，暂不支持预览";
     const canExport = item.source_kind === "export" && Boolean(item.lcsc_part);
     const exportTitle = canExport ? queueLabel : "外部库元件只读，不能加入 export 导出队列";
     const row = document.createElement("div");
@@ -1116,7 +844,15 @@ function renderImportedPanel() {
   ($("imported-search-input") as HTMLInputElement).value = importedUi.query;
   const sourceFilter = $("imported-source-filter") as HTMLSelectElement;
   sourceFilter.value = importedUi.sourceFilter;
-  sourceFilter.innerHTML = `<option value="">全部来源</option>${Array.from(new Set(importedUi.items.map((item) => item.source_kind))).sort().map((kind) => `<option value="${escapeAttr(kind)}">${escapeHtml(librarySourceLabel(kind))}</option>`).join("")}`;
+  sourceFilter.innerHTML = `<option value="">全部来源</option>${Array.from(
+    new Set(importedUi.items.map((item) => item.source_kind)),
+  )
+    .sort()
+    .map(
+      (kind) =>
+        `<option value="${escapeAttr(kind)}">${escapeHtml(librarySourceLabel(kind))}</option>`,
+    )
+    .join("")}`;
   sourceFilter.value = importedUi.sourceFilter;
   refreshButton.disabled = controlsDisabled;
   browseButton.disabled = controlsDisabled;
@@ -1135,12 +871,14 @@ function renderImportedPanel() {
   });
   applyTooltips();
 
-  const resolvedPath =
-    importedUi.scannedPath || lastState?.export_output_path || t("status.none");
+  const resolvedPath = importedUi.scannedPath || lastState?.export_output_path || t("status.none");
   path.textContent = `${t("imported.scannedPath")} ${resolvedPath}`;
   const sources = $("imported-sources");
   sources.innerHTML = importedUi.sources
-    .map((source) => `<span class="library-source-chip" title="${escapeAttr(source.path)}"><b>${escapeHtml(librarySourceLabel(source.kind))}</b><small>${escapeHtml(source.path)}</small>${source.configured ? `<button class="icon-only" data-remove-kicad-library="${escapeAttr(source.path)}" title="移除外部库来源" aria-label="移除外部库来源"><i data-lucide="x"></i></button>` : ""}</span>`)
+    .map(
+      (source) =>
+        `<span class="library-source-chip" title="${escapeAttr(source.path)}"><b>${escapeHtml(librarySourceLabel(source.kind))}</b><small>${escapeHtml(source.path)}</small>${source.configured ? `<button class="icon-only" data-remove-kicad-library="${escapeAttr(source.path)}" title="移除外部库来源" aria-label="移除外部库来源"><i data-lucide="x"></i></button>` : ""}</span>`,
+    )
     .join("");
   mountIcons();
 
@@ -1189,7 +927,8 @@ function renderImportedPanel() {
 
   table.classList.add("hidden");
   empty.classList.remove("hidden");
-  empty.textContent = importedUi.items.length > 0 ? t("imported.noFilterResults") : t("imported.empty");
+  empty.textContent =
+    importedUi.items.length > 0 ? t("imported.noFilterResults") : t("imported.empty");
 }
 
 async function refreshState() {
@@ -1203,7 +942,10 @@ async function selectDirectory(title: string): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
-async function selectSaveFile(title: string, defaultPath: string | undefined): Promise<string | null> {
+async function selectSaveFile(
+  title: string,
+  defaultPath: string | undefined,
+): Promise<string | null> {
   const selected = await save({
     title,
     defaultPath: defaultPath && defaultPath.trim().length > 0 ? defaultPath : undefined,
@@ -1235,7 +977,8 @@ function showMonitorSaveResult(message: string, kind?: ExportMessageKind) {
 
 function classifySaveResult(message: string): ExportMessageKind {
   const lower = message.toLowerCase();
-  if (lower.startsWith("saved") || lower.startsWith("exported") || lower.startsWith("queued")) return "success";
+  if (lower.startsWith("saved") || lower.startsWith("exported") || lower.startsWith("queued"))
+    return "success";
   if (lower.includes("failed")) return "error";
   return "warn";
 }
@@ -1249,7 +992,7 @@ function showImportedResult(message: string, kind?: ExportMessageKind) {
 }
 
 function inventoryPartById(id: string | null): InventoryPart | null {
-  return id ? inventoryUi.allParts.find((part) => part.id === id) ?? null : null;
+  return id ? (inventoryUi.allParts.find((part) => part.id === id) ?? null) : null;
 }
 
 function inventoryTotal(part: InventoryPart): number {
@@ -1330,9 +1073,12 @@ function renderInventoryLibraryPicker() {
   }
   list.innerHTML = items
     .map((item) => {
-      const existing = inventoryUi.allParts.find((part) => item.lcsc_part
-        ? part.library_lcsc === item.lcsc_part
-        : part.library_source_file === item.source_file && part.library_symbol_name === item.symbol_name);
+      const existing = inventoryUi.allParts.find((part) =>
+        item.lcsc_part
+          ? part.library_lcsc === item.lcsc_part
+          : part.library_source_file === item.source_file &&
+            part.library_symbol_name === item.symbol_name,
+      );
       return `<button class="inventory-library-option" data-select-inventory-library="${escapeAttr(item.library_key)}"><span><strong>${escapeHtml(item.lcsc_part || "无供应商编号")}</strong><b>${escapeHtml(item.value)}</b><small>${escapeHtml(item.package || t("inventory.packagePending"))} · ${escapeHtml(item.symbol_name)} · ${escapeHtml(librarySourceLabel(item.source_kind))}</small></span>${existing ? `<em>${escapeHtml(t("inventory.alreadyAdded"))}</em>` : ""}</button>`;
     })
     .join("");
@@ -1356,9 +1102,12 @@ async function openInventoryLibraryPicker() {
 function selectInventoryLibraryPart(libraryKey: string) {
   const item = inventoryUi.libraryItems.find((candidate) => candidate.library_key === libraryKey);
   if (!item) return;
-  const existing = inventoryUi.allParts.find((part) => item.lcsc_part
-    ? part.library_lcsc === item.lcsc_part
-    : part.library_source_file === item.source_file && part.library_symbol_name === item.symbol_name);
+  const existing = inventoryUi.allParts.find((part) =>
+    item.lcsc_part
+      ? part.library_lcsc === item.lcsc_part
+      : part.library_source_file === item.source_file &&
+        part.library_symbol_name === item.symbol_name,
+  );
   if (existing) {
     openInventoryEditor(existing);
   } else {
@@ -1397,15 +1146,16 @@ function renderInventoryLocationFields() {
 }
 
 function renderInventoryList() {
-  if (importedPreviewUi.item) {
-    closeImportedPreview();
-  }
+  closeImportedPreview();
   const list = $("inventory-list");
   list.innerHTML = inventoryUi.parts
     .map((part) => {
       const libraryItem = inventoryLibraryItem(part);
       const locations = part.locations
-        .map((location) => `<span class="inventory-location-chip"><b>${escapeHtml(location.location)}</b><em>${location.quantity}</em></span>`)
+        .map(
+          (location) =>
+            `<span class="inventory-location-chip"><b>${escapeHtml(location.location)}</b><em>${location.quantity}</em></span>`,
+        )
         .join("");
       return `
         <div class="inventory-row" data-inventory-preview-row="${escapeAttr(part.id)}">
@@ -1433,9 +1183,15 @@ function allocationTotal(row: BomPreviewRow): number {
 function defaultInventoryAllocations(part: InventoryPart, required: number): InventoryAllocation[] {
   let remaining = required;
   return [...part.locations]
-    .sort((left, right) => left.priority - right.priority || left.location.localeCompare(right.location))
+    .sort(
+      (left, right) =>
+        left.priority - right.priority || left.location.localeCompare(right.location),
+    )
     .map((location, index, locations) => {
-      const quantity = index === locations.length - 1 ? Math.max(remaining, 0) : Math.min(Math.max(location.quantity, 0), Math.max(remaining, 0));
+      const quantity =
+        index === locations.length - 1
+          ? Math.max(remaining, 0)
+          : Math.min(Math.max(location.quantity, 0), Math.max(remaining, 0));
       remaining -= quantity;
       return { part_id: part.id, location: location.location, quantity };
     });
@@ -1445,7 +1201,8 @@ function bomMatchStatus(row: BomPreviewRow): string {
   if (row.supplier_part_number_conflict) return t("inventory.statusConflict");
   if (row.match_kind === "ambiguous") return t("inventory.statusAmbiguous");
   if (row.matched_part_id) return t("inventory.statusInventory");
-  if (row.library_candidates.some((candidate) => !candidate.already_in_inventory)) return t("inventory.statusLibrary");
+  if (row.library_candidates.some((candidate) => !candidate.already_in_inventory))
+    return t("inventory.statusLibrary");
   if (row.supplier_part_number) return t("inventory.statusPending");
   return t("inventory.statusManual");
 }
@@ -1462,7 +1219,9 @@ function bomLibraryStatus(row: BomPreviewRow): string {
 }
 
 function bomModelStatus(row: BomPreviewRow): string {
-  return t(row.model_status === "available" ? "inventory.libraryModel" : "inventory.libraryNoModel");
+  return t(
+    row.model_status === "available" ? "inventory.libraryModel" : "inventory.libraryNoModel",
+  );
 }
 
 function bomLibrarySelection(row: BomPreviewRow): string {
@@ -1476,8 +1235,19 @@ function bomLibrarySelection(row: BomPreviewRow): string {
 function bomLibraryOptions(row: BomPreviewRow): string {
   const selected = bomLibrarySelection(row);
   const choices = new Map<string, string>();
-  for (const candidate of row.library_candidates) choices.set(candidate.library_key, `${candidate.label}${candidate.has_model ? ` · ${t("inventory.libraryModel")}` : ` · ${t("inventory.libraryNoModel")}`}`);
-  return `<option value="">${escapeHtml(t("inventory.manualRecord"))}</option>${Array.from(choices.entries()).map(([key, label]) => `<option value="${escapeAttr(key)}" ${key === selected ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}`;
+  for (const candidate of row.library_candidates)
+    choices.set(
+      candidate.library_key,
+      `${candidate.label}${candidate.has_model ? ` · ${t("inventory.libraryModel")}` : ` · ${t("inventory.libraryNoModel")}`}`,
+    );
+  return `<option value="">${escapeHtml(t("inventory.manualRecord"))}</option>${Array.from(
+    choices.entries(),
+  )
+    .map(
+      ([key, label]) =>
+        `<option value="${escapeAttr(key)}" ${key === selected ? "selected" : ""}>${escapeHtml(label)}</option>`,
+    )
+    .join("")}`;
 }
 
 function renderInventoryBomPreview() {
@@ -1503,16 +1273,31 @@ function renderInventoryBomPreview() {
           const skipped = inventoryUi.bomSkipped.has(row.row_number);
           const selectedPart = inventoryPartById(row.matched_part_id);
           const total = allocationTotal(row);
-          const valid = skipped || Boolean(selectedPart && !row.supplier_part_number_conflict && total === row.required_quantity && row.allocations.every((allocation) => allocation.quantity >= 0));
+          const valid =
+            skipped ||
+            Boolean(
+              selectedPart &&
+              !row.supplier_part_number_conflict &&
+              total === row.required_quantity &&
+              row.allocations.every((allocation) => allocation.quantity >= 0),
+            );
           const candidates = row.candidates
-            .map((candidate) => `<option value="${escapeAttr(candidate.id)}" ${candidate.id === row.matched_part_id ? "selected" : ""}>${escapeHtml(candidate.label)}</option>`)
+            .map(
+              (candidate) =>
+                `<option value="${escapeAttr(candidate.id)}" ${candidate.id === row.matched_part_id ? "selected" : ""}>${escapeHtml(candidate.label)}</option>`,
+            )
             .join("");
           const allocationLocations = selectedPart
             ? selectedPart.locations
                 .slice()
-                .sort((left, right) => left.priority - right.priority || left.location.localeCompare(right.location))
+                .sort(
+                  (left, right) =>
+                    left.priority - right.priority || left.location.localeCompare(right.location),
+                )
                 .map((location) => {
-                  const allocation = row.allocations.find((item) => item.location === location.location);
+                  const allocation = row.allocations.find(
+                    (item) => item.location === location.location,
+                  );
                   return `<label class="inventory-allocation"><span>${escapeHtml(location.location)}</span><input type="number" min="0" step="1" data-bom-allocation="${row.row_number}" data-allocation-location="${escapeAttr(location.location)}" value="${allocation?.quantity ?? 0}" ${skipped ? "disabled" : ""} /></label>`;
                 })
                 .join("")
@@ -1529,12 +1314,15 @@ function renderInventoryBomPreview() {
     </div>`;
   const canConfirm = preview.rows.every((row) => {
     if (inventoryUi.bomSkipped.has(row.row_number)) return true;
-    return !row.supplier_part_number_conflict
-      && Boolean(row.matched_part_id)
-      && allocationTotal(row) === row.required_quantity
-      && row.allocations.every((allocation) => allocation.quantity >= 0);
+    return (
+      !row.supplier_part_number_conflict &&
+      Boolean(row.matched_part_id) &&
+      allocationTotal(row) === row.required_quantity &&
+      row.allocations.every((allocation) => allocation.quantity >= 0)
+    );
   });
-  ($("btn-confirm-inventory-bom") as HTMLButtonElement).disabled = !canConfirm || inventoryUi.bomLoading;
+  ($("btn-confirm-inventory-bom") as HTMLButtonElement).disabled =
+    !canConfirm || inventoryUi.bomLoading;
   ($("btn-import-inventory-bom") as HTMLButtonElement).disabled = inventoryUi.bomLoading;
   applyTooltips(container);
 }
@@ -1557,7 +1345,10 @@ function renderInventoryProductionRecords() {
     return;
   }
   container.innerHTML = inventoryUi.productionRecords
-    .map((record) => `<div class="production-record"><strong>#${record.id}</strong><span>${escapeHtml(record.path)}</span><small>${record.boards} board(s) · ${record.matched_rows}/${record.total_rows} matched${record.skipped_rows ? ` · ${record.skipped_rows} skipped` : ""} · ${escapeHtml(record.created_at)}</small></div>`)
+    .map(
+      (record) =>
+        `<div class="production-record"><strong>#${record.id}</strong><span>${escapeHtml(record.path)}</span><small>${record.boards} board(s) · ${record.matched_rows}/${record.total_rows} matched${record.skipped_rows ? ` · ${record.skipped_rows} skipped` : ""} · ${escapeHtml(record.created_at)}</small></div>`,
+    )
     .join("");
 }
 
@@ -1578,12 +1369,18 @@ function renderInventory() {
     feedback.className = "msg msg-info hidden";
   }
   const editor = $("inventory-editor");
-  editor.classList.toggle("hidden", inventoryUi.editingId === null && inventoryUi.draftName === "" && inventoryUi.draftLocations.length === 0);
+  editor.classList.toggle(
+    "hidden",
+    inventoryUi.editingId === null &&
+      inventoryUi.draftName === "" &&
+      inventoryUi.draftLocations.length === 0,
+  );
   ($("inventory-supplier") as HTMLInputElement).value = inventoryUi.draftSupplier;
   ($("inventory-name") as HTMLInputElement).value = inventoryUi.draftName;
   const packageInput = $("inventory-package") as HTMLInputElement;
   packageInput.value = inventoryUi.draftPackage;
-  packageInput.placeholder = inventoryUi.draftLibraryLcsc && !inventoryUi.draftPackage ? t("inventory.packagePending") : "";
+  packageInput.placeholder =
+    inventoryUi.draftLibraryLcsc && !inventoryUi.draftPackage ? t("inventory.packagePending") : "";
   ($("inventory-note") as HTMLInputElement).value = inventoryUi.draftNote;
   const libraryStatus = $("inventory-library-status");
   if (inventoryUi.draftLibraryLcsc) {
@@ -1613,7 +1410,10 @@ function renderInventory() {
   ($("inventory-bom-boards") as HTMLInputElement).value = inventoryUi.bomBoards;
   renderInventoryBomFeedback();
   renderInventoryBomPreview();
-  $("inventory-production-panel").classList.toggle("hidden", inventoryUi.productionRecords.length === 0);
+  $("inventory-production-panel").classList.toggle(
+    "hidden",
+    inventoryUi.productionRecords.length === 0,
+  );
   renderInventoryProductionRecords();
   renderInventoryLibraryPicker();
   applyTooltips();
@@ -1633,7 +1433,9 @@ async function loadInventory() {
     } else {
       inventoryUi.allParts = response.parts;
     }
-    inventoryUi.productionRecords = await invoke<ProductionRecord[]>("get_production_records", { limit: 20 });
+    inventoryUi.productionRecords = await invoke<ProductionRecord[]>("get_production_records", {
+      limit: 20,
+    });
     try {
       const libraryResponse = await invoke<ImportedSymbolsResponse>("get_imported_symbols");
       inventoryUi.libraryItems = libraryResponse.items;
@@ -1650,11 +1452,22 @@ async function loadInventory() {
   }
 }
 
-function readInventoryDraft(): { supplier: string; name: string; packageName: string; note: string; locations: InventoryLocation[] } {
+function readInventoryDraft(): {
+  supplier: string;
+  name: string;
+  packageName: string;
+  note: string;
+  locations: InventoryLocation[];
+} {
   const locationFields = Array.from(document.querySelectorAll(".inventory-location-row"));
   const locations = locationFields.map((row, index) => ({
-    location: ((row.querySelector("[data-inventory-location]") as HTMLInputElement)?.value ?? "").trim(),
-    quantity: Number.parseInt((row.querySelector("[data-inventory-quantity]") as HTMLInputElement)?.value ?? "0", 10),
+    location: (
+      (row.querySelector("[data-inventory-location]") as HTMLInputElement)?.value ?? ""
+    ).trim(),
+    quantity: Number.parseInt(
+      (row.querySelector("[data-inventory-quantity]") as HTMLInputElement)?.value ?? "0",
+      10,
+    ),
     priority: index,
   }));
   return {
@@ -1662,13 +1475,20 @@ function readInventoryDraft(): { supplier: string; name: string; packageName: st
     name: ($("inventory-name") as HTMLInputElement).value.trim(),
     packageName: ($("inventory-package") as HTMLInputElement).value.trim(),
     note: ($("inventory-note") as HTMLInputElement).value.trim(),
-    locations: locations.map((location) => ({ ...location, quantity: Number.isFinite(location.quantity) ? location.quantity : 0 })),
+    locations: locations.map((location) => ({
+      ...location,
+      quantity: Number.isFinite(location.quantity) ? location.quantity : 0,
+    })),
   };
 }
 
 async function saveInventoryPart() {
   const draft = readInventoryDraft();
-  if (!draft.name || (!draft.packageName && !inventoryUi.draftLibraryLcsc) || draft.locations.some((location) => !location.location)) {
+  if (
+    !draft.name ||
+    (!draft.packageName && !inventoryUi.draftLibraryLcsc) ||
+    draft.locations.some((location) => !location.location)
+  ) {
     showInventoryNotice("元件库记录、封装和库位编号不能为空。", "error");
     return;
   }
@@ -1695,7 +1515,12 @@ async function saveInventoryPart() {
 
 async function previewInventoryBom() {
   const boards = Number.parseInt(inventoryUi.bomBoards.trim(), 10);
-  if (!inventoryUi.bomPath || !/^\d+$/.test(inventoryUi.bomBoards.trim()) || !Number.isSafeInteger(boards) || boards < 1) {
+  if (
+    !inventoryUi.bomPath ||
+    !/^\d+$/.test(inventoryUi.bomBoards.trim()) ||
+    !Number.isSafeInteger(boards) ||
+    boards < 1
+  ) {
     inventoryUi.bomError = "请选择 CSV，并输入大于零的整数板数。";
     renderInventory();
     return;
@@ -1704,7 +1529,10 @@ async function previewInventoryBom() {
   inventoryUi.bomError = null;
   renderInventory();
   try {
-    const preview = await invoke<BomPreview>("preview_inventory_bom", { path: inventoryUi.bomPath, boards });
+    const preview = await invoke<BomPreview>("preview_inventory_bom", {
+      path: inventoryUi.bomPath,
+      boards,
+    });
     inventoryUi.bomPreview = preview;
     inventoryUi.bomSkipped = new Set();
     inventoryUi.bomLibrarySelections = {};
@@ -1729,8 +1557,9 @@ async function importInventoryBom() {
       skipped: inventoryUi.bomSkipped.has(row.row_number),
       library_lcsc: (() => {
         const key = bomLibrarySelection(row);
-        const candidate = row.library_candidates.find((item) => item.library_key === key)
-          ?? inventoryUi.libraryItems.find((item) => item.library_key === key);
+        const candidate =
+          row.library_candidates.find((item) => item.library_key === key) ??
+          inventoryUi.libraryItems.find((item) => item.library_key === key);
         return candidate?.lcsc_part || row.supplier_part_number || null;
       })(),
       library_key: bomLibrarySelection(row) || null,
@@ -1738,7 +1567,10 @@ async function importInventoryBom() {
     const result = await invoke<ImportBomResult>("import_inventory_bom", {
       request: { path: preview.path, revision: preview.revision, rows },
     });
-    inventoryUi.notice = { kind: "success", message: `已导入 ${result.imported} 条库存记录，${result.existing} 条已存在。` };
+    inventoryUi.notice = {
+      kind: "success",
+      message: `已导入 ${result.imported} 条库存记录，${result.existing} 条已存在。`,
+    };
     await loadInventory();
     await previewInventoryBom();
   } catch (error) {
@@ -1762,7 +1594,14 @@ async function confirmInventoryBom() {
   inventoryUi.bomError = null;
   renderInventory();
   try {
-    await invoke<string>("confirm_inventory_bom", { request: { path: preview.path, boards: preview.boards, revision: preview.revision, rows: requestRows } });
+    await invoke<string>("confirm_inventory_bom", {
+      request: {
+        path: preview.path,
+        boards: preview.boards,
+        revision: preview.revision,
+        rows: requestRows,
+      },
+    });
     inventoryUi.bomPreview = null;
     inventoryUi.bomSkipped.clear();
     inventoryUi.notice = { kind: "success", message: t("inventory.confirmed") };
@@ -1794,12 +1633,8 @@ function showExportError(tool: ExportTool, error: string) {
 }
 
 async function loadImportedSymbols() {
-  if (importedPreviewUi.item) {
-    closeImportedPreview();
-  }
-  if (importedStandalonePreviewUi.item) {
-    closeImportedStandalonePreview();
-  }
+  closeImportedPreview();
+  closeImportedStandalonePreview();
   importedUi.loading = true;
   importedUi.notice = null;
   renderImportedPanel();
@@ -1957,6 +1792,16 @@ async function deleteImportedItem(item: ImportedSymbol) {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  setPreviewContext({
+    getDefaultModelFormat: () => lastState?.default_model_format ?? "wrl",
+  });
+  setNoModelsHandler(() => {
+    importedUi.notice = {
+      kind: "warn",
+      message: t("imported.previewNoModels"),
+    };
+    renderImportedPanel();
+  });
   applyStaticTranslations();
   try {
     await refreshState();
@@ -2215,12 +2060,18 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   $("btn-add-kicad-library").addEventListener("click", async () => {
     if (importedUi.loading || importedUi.busy) return;
-    const selected = await open({ directory: true, multiple: true, title: "添加只读 KiCad 元件库" });
+    const selected = await open({
+      directory: true,
+      multiple: true,
+      title: "添加只读 KiCad 元件库",
+    });
     const paths = Array.isArray(selected) ? selected : selected ? [selected] : [];
     await addKicadLibraryPaths(paths);
   });
   $("imported-sources").addEventListener("click", async (event) => {
-    const target = (event.target as HTMLElement).closest("[data-remove-kicad-library]") as HTMLElement | null;
+    const target = (event.target as HTMLElement).closest(
+      "[data-remove-kicad-library]",
+    ) as HTMLElement | null;
     const path = target?.getAttribute("data-remove-kicad-library");
     if (!path) return;
     await invoke("remove_kicad_library_path", { path });
@@ -2259,7 +2110,9 @@ window.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const part = inventoryUi.parts.find((candidate) => candidate.id === row.dataset.inventoryPreviewRow);
+    const part = inventoryUi.parts.find(
+      (candidate) => candidate.id === row.dataset.inventoryPreviewRow,
+    );
     const item = part ? inventoryLibraryItem(part) : null;
     if (item) {
       scheduleImportedPreview(item, row);
@@ -2282,13 +2135,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   $("btn-reset-imported-standalone-preview").addEventListener("click", () => {
-    importedStandalonePreviewViewer?.resetView();
+    resetImportedStandalonePreview();
   });
 
   $("imported-standalone-preview-model-select").addEventListener("change", async (event) => {
     const select = event.target as HTMLSelectElement;
-    importedStandalonePreviewUi.fileName = select.value;
-    await loadImportedStandalonePreviewModel();
+    await selectImportedStandalonePreviewModel(select.value);
   });
 
   $("imported-standalone-preview-modal").addEventListener("click", (event) => {
@@ -2298,7 +2150,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && importedStandalonePreviewUi.item) {
+    if (event.key === "Escape") {
       closeImportedStandalonePreview();
     }
   });
@@ -2327,7 +2179,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   $("imported-edit-lcsc-part-input").addEventListener("input", (event) => {
-    importedUi.editDraftLcscPart = normalizeImportedLcscPart((event.target as HTMLInputElement).value);
+    importedUi.editDraftLcscPart = normalizeImportedLcscPart(
+      (event.target as HTMLInputElement).value,
+    );
     (event.target as HTMLInputElement).value = importedUi.editDraftLcscPart;
   });
 
@@ -2422,14 +2276,13 @@ window.addEventListener("DOMContentLoaded", async () => {
           await refreshState();
         });
         const result = await invoke<string>("import_imported_parts");
-        const kind: ExportMessageKind =
-          result.toLowerCase().includes("failed")
-            ? "error"
-            : result.startsWith("Imported 0 ") || result.startsWith("No ")
-              ? "warn"
-              : result.startsWith("Imported ")
-                ? "success"
-                : "warn";
+        const kind: ExportMessageKind = result.toLowerCase().includes("failed")
+          ? "error"
+          : result.startsWith("Imported 0 ") || result.startsWith("No ")
+            ? "warn"
+            : result.startsWith("Imported ")
+              ? "success"
+              : "warn";
         showImportedResult(result, kind);
         await refreshState();
       } catch (error) {
@@ -2557,7 +2410,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     inventoryUi.draftName = draft.name;
     inventoryUi.draftPackage = draft.packageName;
     inventoryUi.draftNote = draft.note;
-    inventoryUi.draftLocations = [...draft.locations, { location: "", quantity: 0, priority: draft.locations.length }];
+    inventoryUi.draftLocations = [
+      ...draft.locations,
+      { location: "", quantity: 0, priority: draft.locations.length },
+    ];
     renderInventory();
   });
   $("btn-save-inventory").addEventListener("click", async () => {
@@ -2588,7 +2444,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   $("btn-browse-inventory-bom").addEventListener("click", () => {
     $("inventory-bom-panel").classList.remove("hidden");
-    ($("inventory-bom-panel") as HTMLElement).scrollIntoView({ behavior: "smooth", block: "start" });
+    ($("inventory-bom-panel") as HTMLElement).scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   });
   $("btn-close-inventory-bom").addEventListener("click", () => {
     inventoryUi.bomPreview = null;
@@ -2599,7 +2458,14 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   $("btn-select-inventory-bom").addEventListener("click", async () => {
     try {
-      const selected = await open({ title: "Choose BOM CSV", multiple: false, filters: [{ name: "CSV", extensions: ["csv"] }, { name: "All files", extensions: ["*"] }] });
+      const selected = await open({
+        title: "Choose BOM CSV",
+        multiple: false,
+        filters: [
+          { name: "CSV", extensions: ["csv"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
       if (typeof selected === "string") {
         inventoryUi.bomPath = selected;
         inventoryUi.bomPreview = null;
@@ -2629,7 +2495,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     inventoryUi.draftName = draft.name;
     inventoryUi.draftPackage = draft.packageName;
     inventoryUi.draftNote = draft.note;
-    const index = Number.parseInt((remove ?? move)?.getAttribute("data-location-index") ?? "-1", 10);
+    const index = Number.parseInt(
+      (remove ?? move)?.getAttribute("data-location-index") ?? "-1",
+      10,
+    );
     if (index < 0 || index >= draft.locations.length) return;
     if (remove) {
       draft.locations.splice(index, 1);
@@ -2637,14 +2506,22 @@ window.addEventListener("DOMContentLoaded", async () => {
       const direction = move?.getAttribute("data-move-inventory-location");
       const nextIndex = direction === "up" ? index - 1 : index + 1;
       if (nextIndex < 0 || nextIndex >= draft.locations.length) return;
-      [draft.locations[index], draft.locations[nextIndex]] = [draft.locations[nextIndex], draft.locations[index]];
+      [draft.locations[index], draft.locations[nextIndex]] = [
+        draft.locations[nextIndex],
+        draft.locations[index],
+      ];
     }
     inventoryUi.draftLocations = draft.locations;
     renderInventory();
   });
   $("inventory-location-fields").addEventListener("input", (event) => {
     const target = event.target as HTMLInputElement;
-    const index = Number.parseInt(target.getAttribute("data-inventory-location") ?? target.getAttribute("data-inventory-quantity") ?? "-1", 10);
+    const index = Number.parseInt(
+      target.getAttribute("data-inventory-location") ??
+        target.getAttribute("data-inventory-quantity") ??
+        "-1",
+      10,
+    );
     if (index < 0 || !inventoryUi.draftLocations[index]) return;
     if (target.hasAttribute("data-inventory-location")) {
       inventoryUi.draftLocations[index].location = target.value;
@@ -2653,7 +2530,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
   $("inventory-library-list").addEventListener("click", (event) => {
-    const target = (event.target as HTMLElement).closest("[data-select-inventory-library]") as HTMLElement | null;
+    const target = (event.target as HTMLElement).closest(
+      "[data-select-inventory-library]",
+    ) as HTMLElement | null;
     const lcscPart = target?.getAttribute("data-select-inventory-library");
     if (lcscPart) selectInventoryLibraryPart(lcscPart);
   });
@@ -2668,7 +2547,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
     const candidateRow = target.getAttribute("data-bom-candidate");
     if (candidateRow) {
-      const row = inventoryUi.bomPreview?.rows.find((item) => item.row_number === Number(candidateRow));
+      const row = inventoryUi.bomPreview?.rows.find(
+        (item) => item.row_number === Number(candidateRow),
+      );
       if (!row) return;
       row.matched_part_id = target.value || null;
       const part = inventoryPartById(row.matched_part_id);
@@ -2680,12 +2561,15 @@ window.addEventListener("DOMContentLoaded", async () => {
     const allocationRow = target.getAttribute("data-bom-allocation");
     const location = target.getAttribute("data-allocation-location");
     if (allocationRow && location) {
-      const row = inventoryUi.bomPreview?.rows.find((item) => item.row_number === Number(allocationRow));
+      const row = inventoryUi.bomPreview?.rows.find(
+        (item) => item.row_number === Number(allocationRow),
+      );
       if (!row) return;
       const allocation = row.allocations.find((item) => item.location === location);
       const quantity = Math.max(0, Number.parseInt(target.value, 10) || 0);
       if (allocation) allocation.quantity = quantity;
-      else if (row.matched_part_id) row.allocations.push({ part_id: row.matched_part_id, location, quantity });
+      else if (row.matched_part_id)
+        row.allocations.push({ part_id: row.matched_part_id, location, quantity });
       renderInventoryBomPreview();
     }
   });
@@ -2693,10 +2577,14 @@ window.addEventListener("DOMContentLoaded", async () => {
     const target = event.target as HTMLElement;
     const newPartRow = target.closest("[data-new-bom-part]") as HTMLElement | null;
     if (newPartRow) {
-      const row = inventoryUi.bomPreview?.rows.find((item) => item.row_number === Number(newPartRow.getAttribute("data-new-bom-part")));
+      const row = inventoryUi.bomPreview?.rows.find(
+        (item) => item.row_number === Number(newPartRow.getAttribute("data-new-bom-part")),
+      );
       if (!row) return;
       openInventoryEditor();
-      inventoryUi.libraryPickerQuery = [row.supplier_part_number ?? "", row.name, row.package].join(" ").trim();
+      inventoryUi.libraryPickerQuery = [row.supplier_part_number ?? "", row.name, row.package]
+        .join(" ")
+        .trim();
       void openInventoryLibraryPicker();
       scrollInventoryEditorIntoView();
       return;
@@ -2754,7 +2642,9 @@ window.addEventListener("DOMContentLoaded", async () => {
       const delta = Number.parseInt(stockButton.getAttribute("data-stock-delta") ?? "0", 10);
       if (!partId || !location || !delta) return;
       try {
-        await invoke("adjust_inventory_stock", { adjustment: { part_id: partId, location, delta } });
+        await invoke("adjust_inventory_stock", {
+          adjustment: { part_id: partId, location, delta },
+        });
         await loadInventory();
       } catch (error) {
         showInventoryNotice(errorMessage(error), "error");
@@ -2799,8 +2689,12 @@ window.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const importedStandalonePreviewEl = target.closest("[data-standalone-preview-imported]") as HTMLElement | null;
-    const importedStandalonePreview = importedStandalonePreviewEl?.getAttribute("data-standalone-preview-imported");
+    const importedStandalonePreviewEl = target.closest(
+      "[data-standalone-preview-imported]",
+    ) as HTMLElement | null;
+    const importedStandalonePreview = importedStandalonePreviewEl?.getAttribute(
+      "data-standalone-preview-imported",
+    );
     if (importedStandalonePreview !== null && importedStandalonePreview !== undefined) {
       const item = importedItemByKey(importedStandalonePreview);
       if (item) {
