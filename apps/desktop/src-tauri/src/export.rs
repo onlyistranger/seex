@@ -1,8 +1,9 @@
 use happyjlc_core::error::AppError;
 use happyjlc_core::kicad::SymbolFillColor;
 use happyjlc_core::{
-    ComponentConversionRequest, ConversionReporter, FootprintExportOptions, Model3dExportOptions,
-    RunOptions, RunReporter, RunRequest, RunSummary, SymbolExportOptions, run_with_reporter,
+    ComponentConversionRequest, ConversionReporter, FailedItem, FootprintExportOptions,
+    Model3dExportOptions, RunOptions, RunReporter, RunRequest, RunSummary, SymbolExportOptions,
+    run_with_reporter,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ pub struct ExportFinishedPayload {
     pub tool: &'static str,
     pub success: bool,
     pub message: String,
+    pub failed_items: Vec<FailedItem>,
 }
 
 #[derive(Clone, Serialize)]
@@ -145,7 +147,7 @@ fn finish_export(
     result: Result<Option<RunSummary>, String>,
     requested_count: usize,
 ) {
-    let (success, message) = match result {
+    let (success, message, failed_items) = match result {
         Ok(Some(summary)) if summary.failed == 0 => (
             true,
             format!(
@@ -153,18 +155,31 @@ fn finish_export(
                 summary.success,
                 summary.output_dir.display()
             ),
+            Vec::new(),
         ),
-        Ok(Some(summary)) => (
+        Ok(Some(summary)) => {
+            let failed_items = summary.failed_items.clone();
+            (
+                false,
+                format!(
+                    "HappyJLC completed with {} failure(s) out of {} item(s): {}",
+                    summary.failed,
+                    summary.total,
+                    summary.failed_ids.join(", ")
+                ),
+                failed_items,
+            )
+        }
+        Ok(None) => (
+            true,
+            "All components already completed.".to_string(),
+            Vec::new(),
+        ),
+        Err(error) => (
             false,
-            format!(
-                "HappyJLC completed with {} failure(s) out of {} item(s): {}",
-                summary.failed,
-                summary.total,
-                summary.failed_ids.join(", ")
-            ),
+            format!("HappyJLC export failed: {error}"),
+            Vec::new(),
         ),
-        Ok(None) => (true, "All components already completed.".to_string()),
-        Err(error) => (false, format!("HappyJLC export failed: {error}")),
     };
 
     if let Ok(mut monitor) = state.lock() {
@@ -183,6 +198,7 @@ fn finish_export(
             } else {
                 message
             },
+            failed_items,
         },
     );
 }
@@ -318,8 +334,9 @@ fn should_use_project_relative(output_path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportRequest, build_core_request};
+    use super::{ExportFinishedPayload, ExportRequest, build_core_request};
     use crate::config::ExportPathMode;
+    use happyjlc_core::{ErrorCategory, FailedItem};
 
     #[test]
     fn translates_desktop_export_options_to_core_request() {
@@ -367,5 +384,22 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn serializes_categorized_failed_items_in_finished_payload() {
+        let payload = ExportFinishedPayload {
+            tool: "export",
+            success: false,
+            message: "partial failure".to_string(),
+            failed_items: vec![FailedItem {
+                lcsc_id: "C2040".to_string(),
+                category: ErrorCategory::NotFound,
+            }],
+        };
+
+        let value = serde_json::to_value(payload).expect("payload should serialize");
+        assert_eq!(value["failed_items"][0]["lcsc_id"], "C2040");
+        assert_eq!(value["failed_items"][0]["category"], "not_found");
     }
 }

@@ -13,7 +13,7 @@ pub mod symbol_converter;
 
 pub use converter::Converter;
 pub use easyeda::{EasyedaApi, FootprintImporter, SymbolImporter};
-pub use error::{AppError, Result};
+pub use error::{AppError, ErrorCategory, Result};
 pub use export_options::{
     ComponentConversionRequest, FootprintExportOptions, Model3dExportOptions, RunOptions,
     RunRequest, SymbolExportOptions,
@@ -21,4 +21,4 @@ pub use export_options::{
 pub use kicad::{FootprintExporter, ModelExporter, SymbolExporter};
 pub use library::LibraryManager;
 pub use reporting::ConversionReporter;
-pub use runner::{RunReporter, RunSummary, run_with_reporter};
+pub use runner::{FailedItem, RunReporter, RunSummary, run_with_reporter};

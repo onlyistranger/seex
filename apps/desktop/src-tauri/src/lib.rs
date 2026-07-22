@@ -365,13 +365,12 @@ fn set_window_always_on_top(
     })
 }
 
-#[tauri::command]
-fn export(app: State<ManagedApp>, app_handle: AppHandle) -> String {
+fn export_callbacks(app_handle: AppHandle) -> export::ExportCallbacks {
     let emit_handle = app_handle.clone();
     let state_handle = app_handle.clone();
     let finished_handle = app_handle;
 
-    app.controller.spawn_export(export::ExportCallbacks {
+    export::ExportCallbacks {
         on_progress: Some(Arc::new(move |payload| {
             let _ = emit_handle.emit("export-progress", payload);
         })),
@@ -381,7 +380,18 @@ fn export(app: State<ManagedApp>, app_handle: AppHandle) -> String {
         on_state_changed: Some(Arc::new(move || {
             let _ = state_handle.emit("clipboard-changed", ());
         })),
-    })
+    }
+}
+
+#[tauri::command]
+fn export(app: State<ManagedApp>, app_handle: AppHandle) -> String {
+    app.controller.spawn_export(export_callbacks(app_handle))
+}
+
+#[tauri::command]
+fn export_parts(app: State<ManagedApp>, app_handle: AppHandle, parts: Vec<String>) -> String {
+    app.controller
+        .spawn_export_parts(parts, export_callbacks(app_handle))
 }
 
 #[tauri::command]
@@ -641,6 +651,7 @@ pub fn run() {
             set_export_symbol_fill_color,
             set_window_always_on_top,
             export,
+            export_parts,
             get_unique_ids,
             copy_to_clipboard,
             get_imported_symbols,

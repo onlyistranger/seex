@@ -1,5 +1,23 @@
+use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCategory {
+    Network,
+    NotFound,
+    InvalidId,
+    InvalidData,
+    Symbol,
+    Footprint,
+    #[serde(rename = "model_3d")]
+    Model3d,
+    Conversion,
+    Io,
+    TaskPanic,
+    Unknown,
+}
 
 #[derive(Error, Debug)]
 pub enum EasyedaError {
@@ -91,5 +109,66 @@ impl AppError {
             path: path.into(),
             source,
         }
+    }
+
+    pub fn category(&self) -> ErrorCategory {
+        match self {
+            Self::Easyeda(error) => match error {
+                EasyedaError::ApiRequest(_) => ErrorCategory::Network,
+                EasyedaError::InvalidLcscId(_) => ErrorCategory::InvalidId,
+                EasyedaError::ComponentNotFound(_) => ErrorCategory::NotFound,
+                EasyedaError::JsonParse(_) | EasyedaError::InvalidData(_) => {
+                    ErrorCategory::InvalidData
+                }
+            },
+            Self::Kicad(error) => match error {
+                KicadError::SymbolExport(_) => ErrorCategory::Symbol,
+                KicadError::FootprintExport(_) => ErrorCategory::Footprint,
+                KicadError::ModelExport(_) => ErrorCategory::Model3d,
+                KicadError::InvalidVersion => ErrorCategory::Conversion,
+                KicadError::Io(_) => ErrorCategory::Io,
+            },
+            Self::Conversion(_) => ErrorCategory::Conversion,
+            Self::IoContext { .. } => ErrorCategory::Io,
+            Self::Regex(_) => ErrorCategory::InvalidData,
+            Self::Other(_) => ErrorCategory::Unknown,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppError, ConversionError, EasyedaError, ErrorCategory, KicadError};
+
+    #[test]
+    fn categorizes_stable_export_error_classes() {
+        assert_eq!(
+            AppError::from(EasyedaError::InvalidLcscId("bad".to_string())).category(),
+            ErrorCategory::InvalidId
+        );
+        assert_eq!(
+            AppError::from(EasyedaError::ComponentNotFound("C1".to_string())).category(),
+            ErrorCategory::NotFound
+        );
+        assert_eq!(
+            AppError::from(KicadError::SymbolExport("bad symbol".to_string())).category(),
+            ErrorCategory::Symbol
+        );
+        assert_eq!(
+            AppError::from(KicadError::FootprintExport("bad footprint".to_string())).category(),
+            ErrorCategory::Footprint
+        );
+        assert_eq!(
+            AppError::from(KicadError::ModelExport("bad model".to_string())).category(),
+            ErrorCategory::Model3d
+        );
+        assert_eq!(
+            AppError::from(ConversionError::InvalidCoordinate("x".to_string())).category(),
+            ErrorCategory::Conversion
+        );
+        assert_eq!(
+            AppError::Other("unexpected".to_string()).category(),
+            ErrorCategory::Unknown
+        );
     }
 }

@@ -1,4 +1,5 @@
 use crate::checkpoint::{CheckpointManager, CompletedAssets};
+use crate::error::ErrorCategory;
 use crate::{
     AppError, ComponentConversionRequest, ConversionReporter, EasyedaApi, LibraryManager, Result,
     RunRequest, footprint_converter, model_converter, symbol_converter,
@@ -26,8 +27,15 @@ pub struct RunSummary {
     pub success: usize,
     pub failed: usize,
     pub failed_ids: Vec<String>,
+    pub failed_items: Vec<FailedItem>,
     pub output_dir: PathBuf,
     pub is_batch: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct FailedItem {
+    pub lcsc_id: String,
+    pub category: ErrorCategory,
 }
 
 #[derive(Clone)]
@@ -36,6 +44,7 @@ struct RunProgress {
     failed_count: Arc<AtomicUsize>,
     successful_ids: Arc<Mutex<Vec<String>>>,
     failed_ids: Arc<Mutex<Vec<String>>>,
+    failed_items: Arc<Mutex<Vec<FailedItem>>>,
 }
 
 impl RunProgress {
@@ -45,6 +54,7 @@ impl RunProgress {
             failed_count: Arc::new(AtomicUsize::new(0)),
             successful_ids: Arc::new(Mutex::new(Vec::new())),
             failed_ids: Arc::new(Mutex::new(Vec::new())),
+            failed_items: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -53,13 +63,33 @@ impl RunProgress {
         self.successful_ids.lock().await.push(lcsc_id.to_string());
     }
 
-    async fn record_failure(&self, lcsc_id: &str) {
+    async fn record_failure(&self, lcsc_id: &str, error: &AppError) {
         self.failed_count.fetch_add(1, Ordering::Relaxed);
         self.failed_ids.lock().await.push(lcsc_id.to_string());
+        self.failed_items.lock().await.push(FailedItem {
+            lcsc_id: lcsc_id.to_string(),
+            category: error.category(),
+        });
+    }
+
+    async fn record_task_panic(&self) {
+        self.failed_count.fetch_add(1, Ordering::Relaxed);
+        self.failed_ids
+            .lock()
+            .await
+            .push("<task panic>".to_string());
+        self.failed_items.lock().await.push(FailedItem {
+            lcsc_id: "<task panic>".to_string(),
+            category: ErrorCategory::TaskPanic,
+        });
     }
 
     async fn failed_ids(&self) -> Vec<String> {
         self.failed_ids.lock().await.clone()
+    }
+
+    async fn failed_items(&self) -> Vec<FailedItem> {
+        self.failed_items.lock().await.clone()
     }
 
     async fn successful_ids(&self) -> Vec<String> {
@@ -156,11 +186,13 @@ async fn execute(prepared: PreparedRun, reporter: Arc<dyn RunReporter>) -> Resul
     run_result?;
 
     let failed_ids = progress.failed_ids().await;
+    let failed_items = progress.failed_items().await;
     Ok(RunSummary {
         total: total_count,
         success: progress.success_count(),
         failed: progress.failed_count(),
         failed_ids,
+        failed_items,
         output_dir: prepared.request.run.output.clone(),
         is_batch: prepared.is_batch,
     })
@@ -203,7 +235,7 @@ async fn run_parallel(
                     Ok::<(), AppError>(())
                 }
                 Err(error) => {
-                    progress.record_failure(&lcsc_id).await;
+                    progress.record_failure(&lcsc_id, &error).await;
                     reporter.on_component_failed(&lcsc_id, &error, continue_on_error);
                     Err(error)
                 }
@@ -223,7 +255,7 @@ async fn run_parallel(
             }
             Err(error) if error.is_cancelled() => {}
             Err(error) => {
-                progress.record_failure("<task panic>").await;
+                progress.record_task_panic().await;
                 reporter.on_task_panicked(&error.to_string());
                 if !continue_on_error && first_error.is_none() {
                     first_error = Some(AppError::Other(format!("Task panicked: {}", error)));
@@ -262,7 +294,7 @@ async fn run_sequential(
                 reporter.on_component_succeeded(lcsc_id);
             }
             Err(error) => {
-                progress.record_failure(lcsc_id).await;
+                progress.record_failure(lcsc_id, &error).await;
 
                 if prepared.request.run.continue_on_error {
                     reporter.on_component_failed(lcsc_id, &error, true);

@@ -151,6 +151,13 @@
                 </div>
                 <div id="export-status" class="msg msg-warn hidden"></div>
                 <div id="export-result" class="msg msg-info hidden"></div>
+                <div id="export-failures" class="export-failures hidden" aria-live="polite">
+                  <div class="export-failures-head">
+                    <button class="export-failures-title" id="btn-toggle-export-failures" type="button" aria-expanded="false"><i data-lucide="triangle-alert"></i><strong id="export-failures-summary"></strong></button>
+                    <button class="btn-outline btn-sm" id="btn-retry-export-failures" disabled><i data-lucide="rotate-ccw"></i><span data-i18n="export.retryFailed">仅重试失败项</span></button>
+                  </div>
+                  <div id="export-failure-list" class="export-failure-list"></div>
+                </div>
               </div>
               <div class="export-next-step">
                 <i data-lucide="arrow-right"></i>

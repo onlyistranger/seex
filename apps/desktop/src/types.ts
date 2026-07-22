@@ -36,11 +36,30 @@ export interface AppState {
 
 export type ExportTool = "export";
 export type ExportMessageKind = "info" | "warn" | "success" | "error";
+export type ExportFailureCategory =
+  | "network"
+  | "not_found"
+  | "invalid_id"
+  | "invalid_data"
+  | "symbol"
+  | "footprint"
+  | "model_3d"
+  | "conversion"
+  | "io"
+  | "task_panic"
+  | "unknown";
+
+export interface ExportFailedItem {
+  lcsc_id: string;
+  category: ExportFailureCategory;
+}
 
 export interface ExportFinishedPayload {
   tool: ExportTool;
   success: boolean;
   message: string;
+  /** Optional for compatibility with an older desktop backend. */
+  failed_items?: ExportFailedItem[];
 }
 
 export interface ExportProgressPayload {

@@ -14,6 +14,8 @@ import { toast } from "../ui/toast";
 import type {
   AppState,
   ExportCardOptions,
+  ExportFailedItem,
+  ExportFailureCategory,
   ExportFinishedPayload,
   ExportMessageKind,
   ExportNotice,
@@ -21,7 +23,7 @@ import type {
   ExportProgressState,
   ExportTool,
 } from "../types";
-import { $ } from "../utils";
+import { $, escapeHtml } from "../utils";
 
 const t = translate;
 
@@ -36,9 +38,19 @@ const exportUi: Record<
     progress: ExportProgressState | null;
     notice: ExportNotice | null;
     resultKind: ExportMessageKind;
+    failedItems: ExportFailedItem[];
+    retrying: boolean;
+    failuresExpanded: boolean;
   }
 > = {
-  export: { progress: null, notice: null, resultKind: "info" },
+  export: {
+    progress: null,
+    notice: null,
+    resultKind: "info",
+    failedItems: [],
+    retrying: false,
+    failuresExpanded: false,
+  },
 };
 
 let context: ExportPageContext | null = null;
@@ -140,7 +152,8 @@ function renderExportResult(
 function renderExporterCard(options: ExportCardOptions): void {
   $(options.countId).textContent = `${options.matchedCount} ${t("export.itemsReady")}`;
 
-  const busy = options.running || exportUi[options.tool].progress !== null;
+  const busy =
+    options.running || exportUi[options.tool].progress !== null || exportUi[options.tool].retrying;
   const button = $(options.buttonId) as HTMLButtonElement;
   button.disabled = options.matchedCount === 0 || busy || Boolean(options.buttonDisabled);
   button.textContent = busy ? t("export.running") : t(options.exportLabelKey);
@@ -148,6 +161,37 @@ function renderExporterCard(options: ExportCardOptions): void {
   renderExportProgress(options.tool, busy, t(options.runningLabelKey));
   renderExportNotice(options.tool, options.derivedNotice ?? null);
   renderExportResult(options.tool, options.result, busy, options.derivedNotice ?? null);
+}
+
+function failureCategoryLabel(category: ExportFailureCategory): string {
+  return t(`export.failureCategory.${category}`);
+}
+
+function renderExportFailures(): void {
+  const container = $("export-failures");
+  const summary = $("export-failures-summary");
+  const list = $("export-failure-list");
+  const toggleButton = $("btn-toggle-export-failures") as HTMLButtonElement;
+  const retryButton = $("btn-retry-export-failures") as HTMLButtonElement;
+  const items = exportUi.export.failedItems;
+
+  container.classList.toggle("hidden", items.length === 0);
+  summary.textContent = `${items.length} ${t("export.failedItems")}`;
+  toggleButton.setAttribute("aria-expanded", String(exportUi.export.failuresExpanded));
+  list.classList.toggle("hidden", !exportUi.export.failuresExpanded);
+  retryButton.disabled =
+    items.length === 0 || exportUi.export.retrying || Boolean(lastState?.export_running);
+  if (items.length === 0) {
+    list.replaceChildren();
+    return;
+  }
+
+  list.innerHTML = items
+    .map(
+      (item) =>
+        `<div class="export-failure-row"><code>${escapeHtml(item.lcsc_id)}</code><span>${escapeHtml(failureCategoryLabel(item.category))}</span></div>`,
+    )
+    .join("");
 }
 
 function syncExportProgressWithState(state: AppState): boolean {
@@ -194,6 +238,7 @@ export function render(state: AppState, force = false): void {
           message: t("export.exportSelectAtLeastOne"),
         },
   });
+  renderExportFailures();
 }
 
 function setExportNotice(message: string | null, kind: ExportMessageKind = "warn"): void {
@@ -203,6 +248,9 @@ function setExportNotice(message: string | null, kind: ExportMessageKind = "warn
 
 function startExportProgress(message: string): void {
   exportUi.export.notice = null;
+  exportUi.export.failedItems = [];
+  exportUi.export.retrying = false;
+  exportUi.export.failuresExpanded = false;
   exportUi.export.progress = {
     determinate: false,
     current: 0,
@@ -228,6 +276,9 @@ function finishExportProgress(payload: ExportFinishedPayload): void {
   exportUi[payload.tool].progress = null;
   exportUi[payload.tool].notice = null;
   exportUi[payload.tool].resultKind = payload.success ? "success" : "error";
+  exportUi[payload.tool].failedItems = payload.failed_items ?? [];
+  exportUi[payload.tool].retrying = false;
+  exportUi[payload.tool].failuresExpanded = false;
   if (payload.success) {
     toast.success(payload.message);
   } else {
@@ -244,6 +295,7 @@ function showExportStartResult(result: string): boolean {
 
   exportUi.export.progress = null;
   exportUi.export.notice = null;
+  exportUi.export.retrying = false;
   toast.warn(result);
   rerender();
   return false;
@@ -252,6 +304,7 @@ function showExportStartResult(result: string): boolean {
 function showExportError(error: string): void {
   exportUi.export.progress = null;
   exportUi.export.notice = null;
+  exportUi.export.retrying = false;
   toast.error(error);
   rerender();
 }
@@ -280,6 +333,28 @@ async function exportComponents(): Promise<void> {
   }
 }
 
+async function retryFailedExports(): Promise<void> {
+  const ids = exportUi.export.failedItems.map((item) => item.lcsc_id);
+  const currentContext = context;
+  if (ids.length === 0 || !currentContext || exportUi.export.retrying) return;
+
+  try {
+    await currentContext.queueConfigWrite(async () => {
+      await settingsPage.syncExportInputs();
+      await currentContext.refresh();
+    });
+    startExportProgress(t("export.retrying"));
+    exportUi.export.retrying = true;
+    rerender();
+    const result = await invoke<string>("export_parts", { parts: ids });
+    showExportStartResult(result);
+    await currentContext.refresh();
+  } catch (error) {
+    showExportError(errorMessage(error));
+    await currentContext.refresh();
+  }
+}
+
 export function mount(nextContext: ExportPageContext): void {
   if (mounted) return;
   mounted = true;
@@ -287,6 +362,13 @@ export function mount(nextContext: ExportPageContext): void {
 
   $("btn-export").addEventListener("click", () => {
     void exportComponents();
+  });
+  $("btn-retry-export-failures").addEventListener("click", () => {
+    void retryFailedExports();
+  });
+  $("btn-toggle-export-failures").addEventListener("click", () => {
+    exportUi.export.failuresExpanded = !exportUi.export.failuresExpanded;
+    rerender();
   });
 }
 

@@ -493,31 +493,64 @@ impl AppController {
         )
     }
 
+    fn build_export_request(&self, ids: Vec<String>) -> Result<export::ExportRequest, String> {
+        if ids.is_empty() {
+            return Err("No matched results to export".to_string());
+        }
+
+        let m = self
+            .state
+            .lock()
+            .map_err(|_| "State lock failed".to_string())?;
+        if !m.export_has_export_targets() {
+            return Err("Select at least one export type".to_string());
+        }
+
+        Ok(export::ExportRequest {
+            ids,
+            output_path: m.export_output_path.clone(),
+            show_terminal: m.export_show_terminal,
+            parallel: m.export_parallel,
+            path_mode: m.export_path_mode,
+            export_symbol: m.export_symbol,
+            export_footprint: m.export_footprint,
+            export_model_3d: m.export_model_3d,
+            overwrite_symbol: m.export_overwrite_symbol,
+            overwrite_footprint: m.export_overwrite_footprint,
+            overwrite_model_3d: m.export_overwrite_model_3d,
+            symbol_fill_color: m.export_symbol_fill_color.clone(),
+        })
+    }
+
     pub fn spawn_export(&self, callbacks: export::ExportCallbacks) -> String {
-        let request = if let Ok(m) = self.state.lock() {
-            let ids = m.get_unique_ids();
-            if ids.is_empty() {
-                return "No matched results to export".to_string();
-            }
-            if !m.export_has_export_targets() {
-                return "Select at least one export type".to_string();
-            }
-            export::ExportRequest {
-                ids,
-                output_path: m.export_output_path.clone(),
-                show_terminal: m.export_show_terminal,
-                parallel: m.export_parallel,
-                path_mode: m.export_path_mode,
-                export_symbol: m.export_symbol,
-                export_footprint: m.export_footprint,
-                export_model_3d: m.export_model_3d,
-                overwrite_symbol: m.export_overwrite_symbol,
-                overwrite_footprint: m.export_overwrite_footprint,
-                overwrite_model_3d: m.export_overwrite_model_3d,
-                symbol_fill_color: m.export_symbol_fill_color.clone(),
-            }
-        } else {
-            return "State lock failed".to_string();
+        let ids = match self.state.lock() {
+            Ok(m) => m.get_unique_ids(),
+            Err(_) => return "State lock failed".to_string(),
+        };
+        let request = match self.build_export_request(ids) {
+            Ok(request) => request,
+            Err(message) => return message,
+        };
+
+        match export::spawn_export(Arc::clone(&self.state), request, callbacks) {
+            Ok(()) => "Export started".to_string(),
+            Err(message) => message,
+        }
+    }
+
+    pub fn spawn_export_parts(
+        &self,
+        parts: Vec<String>,
+        callbacks: export::ExportCallbacks,
+    ) -> String {
+        let normalized = normalize_direct_lcsc_parts(parts);
+        if normalized.normalized_parts.is_empty() {
+            return "No valid LCSC parts to export".to_string();
+        }
+
+        let request = match self.build_export_request(normalized.normalized_parts) {
+            Ok(request) => request,
+            Err(message) => return message,
         };
 
         match export::spawn_export(Arc::clone(&self.state), request, callbacks) {
@@ -826,6 +859,42 @@ mod tests {
         assert_eq!(parsed.matched_part_count, 3);
         assert_eq!(parsed.duplicate_part_count, 1);
         assert_eq!(parsed.invalid_entry_count, 2);
+    }
+
+    #[test]
+    fn retry_export_request_keeps_matched_queue_unchanged() {
+        let root = test_root("retry_export_request");
+        let paths = AppPaths::for_test(
+            root.join("config"),
+            root.join("data"),
+            root.join("cache"),
+            None,
+        );
+        let controller =
+            AppController::new(paths, Arc::new(|| {})).expect("controller should initialize");
+
+        {
+            let mut state = controller
+                .state()
+                .lock()
+                .expect("state lock should succeed");
+            state
+                .matched
+                .push(("10:00:00".to_string(), "C999".to_string()));
+        }
+
+        let request = controller
+            .build_export_request(vec!["C123".to_string()])
+            .expect("retry request should use the selected IDs");
+        assert_eq!(request.ids, vec!["C123"]);
+
+        let state = controller
+            .state()
+            .lock()
+            .expect("state lock should succeed");
+        assert_eq!(state.get_unique_ids(), vec!["C999"]);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
