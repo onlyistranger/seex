@@ -3,13 +3,19 @@ name: deploy
 on:
   push:
     tags:
-      - 'v*'
+      - '*'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
         description: Release tag to build, for example v1.0.20
         required: true
         type: string
+
+concurrency:
+  group: deploy-${{ github.event.release.tag_name || github.ref_name || inputs.tag }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -19,6 +25,6 @@ jobs:
     name: build and publish release
     uses: ./.github/workflows/release.yml
     with:
-      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      tag: ${{ github.event.release.tag_name || (github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name) }}
     permissions:
       contents: write

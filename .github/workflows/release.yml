@@ -220,6 +220,7 @@ jobs:
     steps:
       - name: Check out release notes
         uses: actions/checkout@v7
+        continue-on-error: true
         with:
           ref: refs/tags/${{ inputs.tag }}
           sparse-checkout: .github/release_notes
@@ -236,4 +237,4 @@ jobs:
         with:
           tag_name: ${{ inputs.tag }}
           files: release-assets/*
-          body_path: .github/release_notes/${{ inputs.tag }}.md
+          body_path: ${{ hashFiles(format('.github/release_notes/{0}.md', inputs.tag)) != '' && format('.github/release_notes/{0}.md', inputs.tag) || '' }}
