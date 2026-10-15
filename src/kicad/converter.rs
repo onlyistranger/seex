@@ -175,17 +175,31 @@ impl Converter {
     }
 }
 
-/// Sanitize a component name for use as a filename/identifier
-pub fn sanitize_name(name: &str) -> String {
-    name.chars()
+/// Sanitize a component name for use as a filename/identifier.
+/// If `replace_dot` is true, replaces '.' with '_'.
+/// If `replace_dot` is false, preserves '.' and restores underscore between digits to decimal point (e.g. 1_6 -> 1.6).
+pub fn sanitize_name(name: &str, replace_dot: bool) -> String {
+    let sanitized: String = name
+        .chars()
         .map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
+            if c.is_alphanumeric() || c == '_' || c == '-' || (!replace_dot && c == '.') {
                 c
             } else {
                 '_'
             }
         })
-        .collect()
+        .collect();
+
+    if replace_dot {
+        sanitized.replace('.', "_")
+    } else {
+        let re_dot = regex::Regex::new(r"(\d)_(\d)").unwrap();
+        let mut result = sanitized;
+        while re_dot.is_match(&result) {
+            result = re_dot.replace_all(&result, "${1}.${2}").to_string();
+        }
+        result
+    }
 }
 
 /// Convert EasyEDA rotation to KiCad rotation
@@ -198,9 +212,68 @@ pub fn angle_to_ki(rotation: f64) -> f64 {
     }
 }
 
+/// Strip part number suffix (like _C12345) and sanitize footprint name
+pub fn restore_footprint_name(title: &str, replace_dot: bool) -> String {
+    let sanitized = sanitize_name(title, replace_dot);
+    let re_c = regex::Regex::new(r"(_C\d+)+$").unwrap();
+    re_c.replace_all(&sanitized, "").to_string()
+}
+
+/// Strip part number suffix and restore/sanitize STEP model name
+pub fn restore_step_model_name(title: &str, replace_dot: bool) -> String {
+    let sanitized = sanitize_name(title, replace_dot);
+    let re_c = regex::Regex::new(r"(_C\d+)+$").unwrap();
+    re_c.replace_all(&sanitized, "").to_string()
+}
+
+/// Helper to generate suffixed footprint/component name
+pub fn make_suffixed_name(title: &str, lcsc_id: &str, replace_dot: bool) -> String {
+    let clean = restore_footprint_name(title, replace_dot);
+    format!("{}_{}", clean, lcsc_id)
+}
+
+/// Helper to generate suffixed 3D model name
+pub fn make_suffixed_model_name(title: &str, lcsc_id: &str, replace_dot: bool) -> String {
+    let clean = restore_step_model_name(title, replace_dot);
+    format!("{}_{}", clean, lcsc_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_restore_footprint_name() {
+        assert_eq!(restore_footprint_name("XT30PW-M_C431092", false), "XT30PW-M");
+        assert_eq!(restore_footprint_name("XT30PW-M", false), "XT30PW-M");
+        assert_eq!(restore_footprint_name("0603WAF1001T5E_C21190", false), "0603WAF1001T5E");
+        assert_eq!(restore_footprint_name("CH340N_C2977777_C2977777", false), "CH340N");
+    }
+
+    #[test]
+    fn test_restore_step_model_name() {
+        assert_eq!(restore_step_model_name("CONN-TH_XT30PW-M_C431092", false), "CONN-TH_XT30PW-M");
+        assert_eq!(restore_step_model_name("CONN-TH_XT30PW-M", false), "CONN-TH_XT30PW-M");
+        assert_eq!(restore_step_model_name("C0603_L1_6-W0_8-H0_8_C1653", false), "C0603_L1.6-W0.8-H0.8");
+        assert_eq!(
+            restore_step_model_name("SOP-8_L4_9-W3_9-P1_27-LS6_0-BL-1_C2977777", false),
+            "SOP-8_L4.9-W3.9-P1.27-LS6.0-BL-1"
+        );
+        assert_eq!(
+            restore_step_model_name("SOD-123_L2_8-W1_8-LS3_7-RD_C77978", false),
+            "SOD-123_L2.8-W1.8-LS3.7-RD"
+        );
+    }
+
+    #[test]
+    fn test_replace_dot_with_underscore() {
+        assert_eq!(restore_step_model_name("C0603_L1_6-W0_8-H0_8_C1653", true), "C0603_L1_6-W0_8-H0_8");
+        assert_eq!(restore_step_model_name("C0603_L1.6-W0.8-H0.8_C1653", true), "C0603_L1_6-W0_8-H0_8");
+        assert_eq!(restore_footprint_name("C0603_L1.6-W0.8-H0.8_C1653", true), "C0603_L1_6-W0_8-H0_8");
+        assert_eq!(restore_footprint_name("C0603_L1_6-W0_8-H0_8_C1653", false), "C0603_L1.6-W0.8-H0.8");
+        assert_eq!(make_suffixed_name("XT30PW-M", "C431092", false), "XT30PW-M_C431092");
+        assert_eq!(make_suffixed_name("XT30PW-M_C431092", "C431092", false), "XT30PW-M_C431092");
+    }
 
     #[test]
     fn test_px_to_mil() {
@@ -230,3 +303,4 @@ mod tests {
         assert!((result - std::f64::consts::PI).abs() < 0.001);
     }
 }
+

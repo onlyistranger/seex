@@ -49,8 +49,7 @@ fn main() -> eframe::Result {
         viewport: ViewportBuilder::default()
             .with_inner_size(Vec2::new(1080.0, 900.0))
             .with_min_inner_size(Vec2::new(1080.0, 720.0))
-            .with_icon(load_app_icon())
-            .with_always_on_top(),
+            .with_icon(load_app_icon()),
         ..Default::default()
     };
 
@@ -735,6 +734,9 @@ impl SeexApp {
                                 force: state.export_force,
                                 schematic_stroke_color: self.schematic_stroke_color,
                                 schematic_fill_color: self.schematic_fill_color,
+                                download_pdf: state.export_download_pdf,
+                                add_suffix: state.export_add_suffix,
+                                replace_dot: state.export_replace_dot,
                             });
                         }
                     });
@@ -892,7 +894,7 @@ impl SeexApp {
                 });
 
                 ui.with_layout(Layout::top_down(egui::Align::Center), |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if state.export_target == "altium" && state.export_mode != "3d" {
                             let mut merge = state.export_merge;
                             if toggle_button(ui, &mut merge, self.t("Merge", "合并")) {
@@ -925,6 +927,25 @@ impl SeexApp {
                             state.set_export_lcsc_english(english);
                             state.bom_language =
                                 if english { "english" } else { "chinese" }.to_string();
+                            save_config = true;
+                        }
+                        let mut download_pdf = state.export_download_pdf;
+                        if toggle_button(ui, &mut download_pdf, self.t("Download PDF", "下载PDF")) {
+                            state.set_export_download_pdf(download_pdf);
+                            save_config = true;
+                        }
+                        let mut add_suffix = state.export_add_suffix;
+                        if toggle_button(ui, &mut add_suffix, self.t("Add Suffix", "添加物料后缀")) {
+                            state.set_export_add_suffix(add_suffix);
+                            save_config = true;
+                        }
+                        let mut replace_dot = state.export_replace_dot;
+                        if toggle_button(
+                            ui,
+                            &mut replace_dot,
+                            self.t("Replace . with _", "替换小数点.为下划线_"),
+                        ) {
+                            state.set_export_replace_dot(replace_dot);
                             save_config = true;
                         }
                     });
@@ -1390,6 +1411,9 @@ fn apply_config_to_state(config: &AppConfig, state: &mut MonitorState) {
     state.set_export_continue_on_error(config.export.continue_on_error);
     state.set_export_lcsc_english(config.export.lcsc_english);
     state.set_export_force(config.export.force);
+    state.set_export_download_pdf(config.export.download_pdf);
+    state.set_export_add_suffix(config.export.add_suffix);
+    state.set_export_replace_dot(config.export.replace_dot);
     state.set_matched_save_path(config.monitor.matched_save_path.clone());
     state.set_bom_language(config.monitor.bom_language.clone());
 }
@@ -1417,6 +1441,9 @@ fn snapshot_config(
             force: state.export_force,
             schematic_stroke_color,
             schematic_fill_color,
+            download_pdf: state.export_download_pdf,
+            add_suffix: state.export_add_suffix,
+            replace_dot: state.export_replace_dot,
         },
         monitor: MonitorConfig {
             matched_save_path: state.matched_save_path.clone(),

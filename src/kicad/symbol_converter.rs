@@ -1,7 +1,7 @@
 use crate::easyeda::{ComponentData, SymbolImporter};
 use crate::error::Result;
 use crate::kicad;
-use crate::kicad::converter::sanitize_name;
+use crate::kicad::converter::{make_suffixed_name, restore_footprint_name};
 use crate::kicad::{KicadExportOptions, LibraryManager, SymbolWriteStatus};
 
 pub fn convert_symbol(
@@ -10,9 +10,13 @@ pub fn convert_symbol(
     lib_manager: &LibraryManager,
     lcsc_id: &str,
 ) -> Result<()> {
-    // Use LCSC ID as unique identifier to prevent name collisions
-    let component_name = format!("{}_{}", sanitize_name(&component_data.title), lcsc_id);
-    let footprint_name = component_name.clone();
+    let (component_name, footprint_name) = if args.add_suffix {
+        let name = make_suffixed_name(&component_data.title, lcsc_id, args.replace_dot);
+        (name.clone(), name)
+    } else {
+        let name = restore_footprint_name(&component_data.title, args.replace_dot);
+        (name.clone(), name)
+    };
 
     let common_unit = SymbolImporter::parse(&component_data.data_str).and_then(|symbol| {
         convert_symbol_unit(&symbol, component_data.bbox_x, component_data.bbox_y)

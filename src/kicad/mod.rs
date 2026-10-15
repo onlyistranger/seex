@@ -1,4 +1,5 @@
 pub mod converter;
+pub mod datasheet;
 pub mod footprint;
 pub mod footprint_converter;
 pub mod footprint_exporter;
@@ -12,6 +13,7 @@ pub mod symbol_converter;
 pub mod symbol_exporter;
 pub mod workflow;
 
+pub use datasheet::{DatasheetExportStatus, download_datasheet_pdf};
 pub use footprint::{
     Drill, Ki3dModel, KiArc as FootprintKiArc, KiCircle as FootprintKiCircle, KiFootprint, KiLine,
     KiPad, KiText, KiTrack, PadShape, PadType,

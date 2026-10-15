@@ -10,6 +10,25 @@ pub struct KicadExportOptions {
     pub full: bool,
     pub force: bool,
     pub kicad_version: KicadVersion,
+    pub download_pdf: bool,
+    pub add_suffix: bool,
+    pub replace_dot: bool,
+}
+
+impl Default for KicadExportOptions {
+    fn default() -> Self {
+        Self {
+            symbol: false,
+            footprint: false,
+            model_3d: false,
+            full: false,
+            force: false,
+            kicad_version: KicadVersion::V6,
+            download_pdf: true,
+            add_suffix: true,
+            replace_dot: false,
+        }
+    }
 }
 
 impl KicadExportOptions {
@@ -33,4 +52,5 @@ pub struct KicadLibraryOptions {
     pub symbol_lib: Option<PathBuf>,
     pub footprint_lib: Option<PathBuf>,
     pub model_lib: Option<PathBuf>,
+    pub doc_lib: Option<PathBuf>,
 }

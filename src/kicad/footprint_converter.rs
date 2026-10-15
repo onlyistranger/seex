@@ -2,7 +2,10 @@ use crate::easyeda::svg_parser::{SvgCommand, parse_svg_path};
 use crate::easyeda::{ComponentData, FootprintImporter};
 use crate::error::Result;
 use crate::kicad;
-use crate::kicad::converter::{Converter, angle_to_ki, sanitize_name};
+use crate::kicad::converter::{
+    Converter, angle_to_ki, make_suffixed_model_name, make_suffixed_name, restore_footprint_name,
+    restore_step_model_name,
+};
 use crate::kicad::{FileWriteStatus, KicadExportOptions, LibraryManager};
 
 const COURTYARD_CLEARANCE_MM: f64 = 0.25;
@@ -17,12 +20,25 @@ pub fn convert_footprint(
     let ee_footprint = FootprintImporter::parse(&component_data.package_detail)?;
     let converter = Converter::new(args.kicad_version);
 
-    // Use LCSC ID as unique identifier to prevent name collisions
-    let footprint_name = format!("{}_{}", sanitize_name(&component_data.title), lcsc_id);
+    let clean_fp_name = restore_footprint_name(&component_data.title, args.replace_dot);
+    let suffixed_fp_name = make_suffixed_name(&component_data.title, lcsc_id, args.replace_dot);
+
+    let clean_model_info = component_data.model_3d.as_ref().map(|m| {
+        (
+            restore_step_model_name(&m.title, args.replace_dot),
+            make_suffixed_model_name(&m.title, lcsc_id, args.replace_dot),
+        )
+    });
+
+    let primary_fp_name = if args.add_suffix {
+        suffixed_fp_name.clone()
+    } else {
+        clean_fp_name.clone()
+    };
 
     // Convert EasyEDA footprint to KiCad footprint
     let mut ki_footprint = kicad::KiFootprint {
-        name: footprint_name,
+        name: primary_fp_name,
         pads: Vec::new(),
         tracks: Vec::new(),
         circles: Vec::new(),
@@ -427,13 +443,10 @@ pub fn convert_footprint(
     add_generated_courtyard_if_missing(&mut ki_footprint, &converter);
 
     // Add 3D model reference if available
-    if let Some(model_info) = &component_data.model_3d
+    if let Some((clean_m, suffixed_m)) = &clean_model_info
         && args.targets_model_3d()
     {
-        // Use LCSC ID as unique identifier to prevent name collisions
-        let model_name = format!("{}_{}", sanitize_name(&model_info.title), lcsc_id);
-
-        // Prefer STEP format as it's more widely supported
+        let model_name = if args.add_suffix { suffixed_m } else { clean_m };
         let model_lib_name = lib_manager.model_lib_name();
         let model_dir_name = lib_manager.model_dir_name();
         let model_path = format!(
@@ -449,21 +462,75 @@ pub fn convert_footprint(
         });
     }
 
-    // Export footprint
     let exporter = kicad::FootprintExporter::new();
-    let footprint_data = exporter.export(&ki_footprint)?;
-    let (_, status) =
-        lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
 
-    match status {
-        FileWriteStatus::Written => log::debug!("Wrote footprint: {}", ki_footprint.name),
-        FileWriteStatus::Skipped => {
-            log::debug!("Skipped existing footprint: {}", ki_footprint.name)
+    if args.add_suffix {
+        // Export footprint (suffixed)
+        let footprint_data = exporter.export(&ki_footprint)?;
+        let (_, status) =
+            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
+
+        match status {
+            FileWriteStatus::Written => log::debug!("Wrote footprint: {}", ki_footprint.name),
+            FileWriteStatus::Skipped => {
+                log::debug!("Skipped existing footprint: {}", ki_footprint.name)
+            }
+        }
+
+        // Also export clean non-suffixed footprint
+        let mut clean_footprint = ki_footprint.clone();
+        clean_footprint.name = clean_fp_name.clone();
+
+        if let Some((clean_m, _)) = &clean_model_info
+            && args.targets_model_3d()
+        {
+            let model_lib_name = lib_manager.model_lib_name();
+            let model_dir_name = lib_manager.model_dir_name();
+            let model_path = format!(
+                "${{{}}}/{}/{}.step",
+                model_lib_name, model_dir_name, clean_m
+            );
+
+            clean_footprint.model_3d = Some(kicad::Ki3dModel {
+                path: model_path,
+                offset: (0.0, 0.0, 0.0),
+                scale: (1.0, 1.0, 1.0),
+                rotate: (0.0, 0.0, 0.0),
+            });
+        }
+
+        let clean_footprint_data = exporter.export(&clean_footprint)?;
+        let (_, clean_status) = lib_manager.write_footprint_if_needed(
+            &clean_footprint.name,
+            &clean_footprint_data,
+            args.force,
+        )?;
+
+        match clean_status {
+            FileWriteStatus::Written => {
+                log::debug!("Wrote clean footprint: {}", clean_footprint.name)
+            }
+            FileWriteStatus::Skipped => {
+                log::debug!("Skipped existing clean footprint: {}", clean_footprint.name)
+            }
+        }
+    } else {
+        // Export ONLY clean footprint
+        let footprint_data = exporter.export(&ki_footprint)?;
+        let (_, status) =
+            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
+
+        match status {
+            FileWriteStatus::Written => log::debug!("Wrote clean footprint: {}", ki_footprint.name),
+            FileWriteStatus::Skipped => {
+                log::debug!("Skipped existing clean footprint: {}", ki_footprint.name)
+            }
         }
     }
 
     Ok(())
 }
+
 
 fn is_footprint_graphic_layer(layer_id: i32) -> bool {
     matches!(layer_id, 3 | 4 | 10 | 11 | 13 | 14 | 15 | 48 | 49 | 99)
@@ -745,4 +812,125 @@ mod tests {
             model_3d: None,
         }
     }
+
+    #[test]
+    fn test_convert_footprint_exports_both_suffixed_and_clean() {
+        use std::fs;
+        let temp_dir = std::env::temp_dir().join(format!("seex_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let lib_manager = LibraryManager::new(&temp_dir);
+        lib_manager.create_directories().unwrap();
+
+        let options = KicadExportOptions {
+            symbol: false,
+            footprint: true,
+            model_3d: true,
+            full: false,
+            force: true,
+            kicad_version: KicadVersion::V6,
+            download_pdf: true,
+            add_suffix: true,
+            replace_dot: false,
+        };
+
+        let component_data = ComponentData {
+            lcsc_id: "C431092".to_string(),
+            title: "XT30PW-M".to_string(),
+            designator: "J?".to_string(),
+            description: "XT30 Connector".to_string(),
+            data_str: Vec::new(),
+            bbox_x: 0.0,
+            bbox_y: 0.0,
+            symbol_parts: Vec::new(),
+            package_detail: vec![
+                "PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string(),
+            ],
+            package_bbox_x: 0.0,
+            package_bbox_y: 0.0,
+            model_3d: Some(crate::easyeda::Model3dInfo {
+                uuid: "dummy-uuid".to_string(),
+                title: "CONN-TH_XT30PW-M".to_string(),
+            }),
+            manufacturer: "".to_string(),
+            datasheet: "".to_string(),
+            jlc_id: "".to_string(),
+        };
+
+        convert_footprint(&options, &component_data, &lib_manager, "C431092").unwrap();
+
+        let suffixed_fp = lib_manager.get_footprint_path("XT30PW-M_C431092");
+        let clean_fp = lib_manager.get_footprint_path("XT30PW-M");
+
+        assert!(suffixed_fp.exists(), "Suffixed footprint should exist: {:?}", suffixed_fp);
+        assert!(clean_fp.exists(), "Clean footprint should exist: {:?}", clean_fp);
+
+        let clean_content = fs::read_to_string(&clean_fp).unwrap();
+        assert!(clean_content.contains(r#"(footprint "XT30PW-M""#), "Header should have clean name");
+        assert!(clean_content.contains(r#"(fp_text value "XT30PW-M""#), "Value should have clean name");
+        assert!(clean_content.contains("CONN-TH_XT30PW-M.step"), "Model path should reference clean step name");
+
+        let suffixed_content = fs::read_to_string(&suffixed_fp).unwrap();
+        assert!(suffixed_content.contains("CONN-TH_XT30PW-M_C431092.step"), "Suffixed model path");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_convert_footprint_exports_clean_only_when_no_suffix() {
+        use std::fs;
+        let temp_dir = std::env::temp_dir().join(format!("seex_test_nosuf_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let lib_manager = LibraryManager::new(&temp_dir);
+        lib_manager.create_directories().unwrap();
+
+        let options = KicadExportOptions {
+            symbol: false,
+            footprint: true,
+            model_3d: true,
+            full: false,
+            force: true,
+            kicad_version: KicadVersion::V6,
+            download_pdf: true,
+            add_suffix: false,
+            replace_dot: false,
+        };
+
+        let component_data = ComponentData {
+            lcsc_id: "C431092".to_string(),
+            title: "XT30PW-M".to_string(),
+            designator: "J?".to_string(),
+            description: "XT30 Connector".to_string(),
+            data_str: Vec::new(),
+            bbox_x: 0.0,
+            bbox_y: 0.0,
+            symbol_parts: Vec::new(),
+            package_detail: vec![
+                "PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string(),
+            ],
+            package_bbox_x: 0.0,
+            package_bbox_y: 0.0,
+            model_3d: Some(crate::easyeda::Model3dInfo {
+                uuid: "dummy-uuid".to_string(),
+                title: "CONN-TH_XT30PW-M".to_string(),
+            }),
+            manufacturer: "".to_string(),
+            datasheet: "".to_string(),
+            jlc_id: "".to_string(),
+        };
+
+        convert_footprint(&options, &component_data, &lib_manager, "C431092").unwrap();
+
+        let suffixed_fp = lib_manager.get_footprint_path("XT30PW-M_C431092");
+        let clean_fp = lib_manager.get_footprint_path("XT30PW-M");
+
+        assert!(!suffixed_fp.exists(), "Suffixed footprint should NOT exist when add_suffix is false");
+        assert!(clean_fp.exists(), "Clean footprint should exist: {:?}", clean_fp);
+
+        let clean_content = fs::read_to_string(&clean_fp).unwrap();
+        assert!(clean_content.contains(r#"(footprint "XT30PW-M""#), "Header should have clean name");
+        assert!(clean_content.contains("CONN-TH_XT30PW-M.step"), "Model path should reference clean step name");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
+

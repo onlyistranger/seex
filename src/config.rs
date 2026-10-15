@@ -61,6 +61,9 @@ pub struct ExportConfig {
     #[serde(alias = "schematic_color")]
     pub schematic_stroke_color: [u8; 3],
     pub schematic_fill_color: [u8; 3],
+    pub download_pdf: bool,
+    pub add_suffix: bool,
+    pub replace_dot: bool,
 }
 
 impl Default for ExportConfig {
@@ -80,6 +83,9 @@ impl Default for ExportConfig {
             // Preserve the existing Altium symbol colors as the initial choices.
             schematic_stroke_color: [11, 56, 104],
             schematic_fill_color: [255, 255, 224],
+            download_pdf: true,
+            add_suffix: true,
+            replace_dot: false,
         }
     }
 }

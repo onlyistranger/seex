@@ -1,4 +1,4 @@
-use super::converter::sanitize_name;
+use super::converter::{make_suffixed_model_name, restore_step_model_name};
 use crate::easyeda::{ComponentData, EasyedaApi};
 use crate::error::Result;
 use crate::kicad::{KicadExportOptions, LibraryManager};
@@ -72,12 +72,22 @@ pub async fn convert_3d_model(
         return Ok(ModelExportStatus::Missing);
     };
 
-    let model_name = format!("{}_{}", sanitize_name(&model_info.title), lcsc_id);
+    let model_name = make_suffixed_model_name(&model_info.title, lcsc_id, args.replace_dot);
+    let clean_model_name = restore_step_model_name(&model_info.title, args.replace_dot);
+
     let step_path = lib_manager.get_step_path(&model_name);
-    let need_step = args.force || !step_path.exists();
+    let clean_step_path = lib_manager.get_step_path(&clean_model_name);
+
+    let need_step = args.force
+        || (args.add_suffix && !step_path.exists())
+        || !clean_step_path.exists();
 
     if !need_step {
-        log::debug!("Skipped existing STEP model: {}", model_name);
+        log::debug!(
+            "Skipped existing STEP models: {} and {}",
+            model_name,
+            clean_model_name
+        );
         return Ok(ModelExportStatus::Skipped);
     }
 
@@ -87,13 +97,24 @@ pub async fn convert_3d_model(
 
     match result {
         Ok(step_data) => {
-            lib_manager.write_step_model(&model_name, &step_data)?;
-            log::debug!("Wrote STEP model: {}", model_name);
+            // Write suffixed STEP model
+            if args.add_suffix && (args.force || !step_path.exists()) {
+                lib_manager.write_step_model(&model_name, &step_data)?;
+                log::debug!("Wrote STEP model: {}", model_name);
+            }
+
+            // Write clean non-suffixed STEP model (原生保存一次)
+            if args.force || !clean_step_path.exists() {
+                lib_manager.write_step_model(&clean_model_name, &step_data)?;
+                log::debug!("Wrote clean STEP model: {}", clean_model_name);
+            }
+
             Ok(ModelExportStatus::Written)
         }
         Err(e) => Err(e),
     }
 }
+
 
 fn decrement(counter: &AtomicUsize) {
     let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {

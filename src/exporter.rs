@@ -32,6 +32,9 @@ pub struct ExportRequest {
     pub force: bool,
     pub schematic_stroke_color: [u8; 3],
     pub schematic_fill_color: [u8; 3],
+    pub download_pdf: bool,
+    pub add_suffix: bool,
+    pub replace_dot: bool,
 }
 
 pub fn spawn_export(state: Arc<Mutex<MonitorState>>, req: ExportRequest) {
@@ -282,6 +285,7 @@ fn build_kicad_batch_options(
             symbol_lib: None,
             footprint_lib: None,
             model_lib: None,
+            doc_lib: None,
         },
         export: KicadExportOptions {
             symbol: mode == "symbol",
@@ -290,6 +294,9 @@ fn build_kicad_batch_options(
             full: mode == "full",
             force: req.force,
             kicad_version: KicadVersion::V6,
+            download_pdf: req.download_pdf,
+            add_suffix: req.add_suffix,
+            replace_dot: req.replace_dot,
         },
         english_metadata: req.lcsc_english,
         parallel: req.parallel.max(1),
@@ -436,10 +443,13 @@ fn format_kicad_summary(
     ));
 
     lines.push(format!(
-        "Continue on error: {} | LCSC English: {} | Force: {}",
+        "Continue on error: {} | LCSC English: {} | Force: {} | Download PDF: {} | Part suffix: {} | Replace dot: {}",
         yes_no(req.continue_on_error),
         yes_no(req.lcsc_english),
         yes_no(req.force),
+        yes_no(req.download_pdf),
+        yes_no(req.add_suffix),
+        yes_no(req.replace_dot),
     ));
 
     lines.push(format!("Library name: {}", resolve_library_name(req)));
@@ -454,6 +464,10 @@ fn format_kicad_summary(
     lines.push(format!(
         "3D models: written {} | skipped {} | missing {}",
         summary.models.written, summary.models.skipped, summary.models.missing
+    ));
+    lines.push(format!(
+        "Datasheets: downloaded {} | skipped {} | missing {}",
+        summary.datasheets.downloaded, summary.datasheets.skipped, summary.datasheets.missing
     ));
 
     if !summary.failed_ids.is_empty() {
@@ -554,10 +568,10 @@ fn merge_label(req: &ExportRequest) -> &'static str {
 fn target_folders(req: &ExportRequest) -> Vec<&'static str> {
     if is_kicad_target(req) {
         match normalize_kicad_mode(&req.mode) {
-            "symbol" => vec!["*.kicad_sym"],
+            "symbol" => vec!["*.kicad_sym", "*.doc"],
             "footprint" => vec!["*.pretty"],
             "3d" => vec!["*.3dshapes"],
-            _ => vec!["*.kicad_sym", "*.pretty", "*.3dshapes"],
+            _ => vec!["*.kicad_sym", "*.pretty", "*.3dshapes", "*.doc"],
         }
     } else {
         match normalize_altium_mode(&req.mode) {

@@ -10,6 +10,10 @@ use tokio::task::JoinSet;
 
 use crate::easyeda::{ComponentData, EasyedaApi};
 use crate::error::{AppError, EasyedaError, Result};
+use crate::kicad::converter::{make_suffixed_name, restore_footprint_name};
+use crate::kicad::datasheet::{
+    DatasheetExportStatus, datasheet_client, download_datasheet_pdf,
+};
 use crate::kicad::{
     KicadExportOptions, KicadLibraryOptions, LibraryManager, ModelExportStatus, ModelStageStatus,
     convert_3d_model, convert_footprint, convert_symbol,
@@ -49,6 +53,7 @@ pub struct KicadBatchSummary {
     pub output: PathBuf,
     pub timings: KicadStageTimings,
     pub models: KicadModelSummary,
+    pub datasheets: KicadDatasheetSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +62,7 @@ pub struct KicadExportedComponent {
     pub component_name: String,
     pub timings: KicadStageTimings,
     pub model: Option<ModelExportStatus>,
+    pub datasheet: Option<DatasheetExportStatus>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -73,6 +79,26 @@ pub struct KicadModelSummary {
     pub written: usize,
     pub skipped: usize,
     pub missing: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KicadDatasheetSummary {
+    pub downloaded: usize,
+    pub skipped: usize,
+    pub missing: usize,
+    pub failed: usize,
+}
+
+impl KicadDatasheetSummary {
+    fn record(&mut self, status: Option<DatasheetExportStatus>) {
+        match status {
+            Some(DatasheetExportStatus::Downloaded) => self.downloaded += 1,
+            Some(DatasheetExportStatus::Skipped) => self.skipped += 1,
+            Some(DatasheetExportStatus::NotFound) => self.missing += 1,
+            Some(DatasheetExportStatus::Failed) => self.failed += 1,
+            None => {}
+        }
+    }
 }
 
 impl KicadStageTimings {
@@ -145,6 +171,7 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
         output: options.library.output.clone(),
         timings: KicadStageTimings::default(),
         models: KicadModelSummary::default(),
+        datasheets: KicadDatasheetSummary::default(),
     };
 
     if let Some(progress) = &options.progress {
@@ -192,6 +219,7 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
                 summary.success += 1;
                 summary.timings.add(exported.timings);
                 summary.models.record(exported.model);
+                summary.datasheets.record(exported.datasheet);
                 if let Some(progress) = &options.progress {
                     progress(
                         summary.success + summary.failed + summary.skipped,
@@ -295,9 +323,34 @@ async fn export_one_kicad_component(
     apply_requested_metadata(&mut component_data, lcsc_client).await;
     timings.metadata = started.elapsed();
 
+    let mut datasheet = None;
     if options.targets_symbol() {
         let started = Instant::now();
         convert_symbol(options, &component_data, manager, lcsc_id)?;
+        if options.download_pdf {
+            let doc_name = if options.add_suffix {
+                make_suffixed_name(&component_data.title, lcsc_id, options.replace_dot)
+            } else {
+                restore_footprint_name(&component_data.title, options.replace_dot)
+            };
+            let client = datasheet_client();
+            let ds_status = download_datasheet_pdf(
+                client,
+                &component_data.datasheet,
+                &doc_name,
+                lcsc_id,
+                manager,
+                options.force,
+            )
+            .await;
+            match ds_status {
+                Ok(status) => datasheet = Some(status),
+                Err(err) => {
+                    log::warn!("Datasheet download error for {lcsc_id}: {err}");
+                    datasheet = Some(DatasheetExportStatus::Failed);
+                }
+            }
+        }
         timings.symbol = started.elapsed();
     }
     if options.targets_footprint() {
@@ -327,6 +380,7 @@ async fn export_one_kicad_component(
         component_name: component_data.title,
         timings,
         model,
+        datasheet,
     })
 }
 
@@ -394,6 +448,13 @@ fn validate_library_options(options: &KicadLibraryOptions) -> Result<()> {
             "--model-lib must point to a .3dshapes directory".to_string(),
         ));
     }
+    if let Some(doc_lib) = &options.doc_lib
+        && !path_ends_with(doc_lib, ".doc")
+    {
+        return Err(AppError::Other(
+            "--doc-lib must point to a .doc directory".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -426,6 +487,9 @@ fn generated_files_for(manager: &LibraryManager, options: &KicadExportOptions) -
     let mut files = Vec::new();
     if options.targets_symbol() {
         files.push(manager.get_symbol_lib_path());
+        if options.download_pdf {
+            files.push(manager.doc_lib_dir().to_path_buf());
+        }
     }
     if options.targets_footprint() {
         files.push(manager.footprint_lib_dir().to_path_buf());
@@ -450,6 +514,9 @@ mod tests {
             full: false,
             force: false,
             kicad_version: KicadVersion::V6,
+            download_pdf: true,
+            add_suffix: true,
+            replace_dot: false,
         };
 
         let err = validate_targets(&export).unwrap_err().to_string();
@@ -464,6 +531,7 @@ mod tests {
             symbol_lib: Some(PathBuf::from("bad.lib")),
             footprint_lib: None,
             model_lib: None,
+            doc_lib: None,
         };
 
         let err = validate_library_options(&options).unwrap_err().to_string();
@@ -504,5 +572,176 @@ mod tests {
         assert_eq!(component_data.description, "CN description");
         assert_eq!(component_data.manufacturer, "CN Manufacturer");
         assert_eq!(component_data.datasheet, "https://source.test/ds");
+    }
+
+    #[tokio::test]
+    async fn test_export_kicad_batch_with_datasheet_and_clean_names() {
+        let root = std::env::temp_dir().join(format!("test_kicad_batch_{}", std::process::id()));
+        let options = KicadBatchOptions {
+            ids: vec!["C77978".to_string()], // 1N4148W-TP
+            library: KicadLibraryOptions {
+                output: root.clone(),
+                library_name: Some("test_lib".to_string()),
+                symbol_lib: None,
+                footprint_lib: None,
+                model_lib: None,
+                doc_lib: None,
+            },
+            export: KicadExportOptions {
+                symbol: true,
+                footprint: true,
+                model_3d: true,
+                full: true,
+                force: true,
+                kicad_version: KicadVersion::V6,
+                download_pdf: true,
+                add_suffix: true,
+                replace_dot: false,
+            },
+            english_metadata: false,
+            parallel: 1,
+            continue_on_error: false,
+            progress: None,
+        };
+
+        let summary = export_kicad_batch(options).await.unwrap();
+        assert_eq!(summary.success, 1);
+        assert_eq!(summary.failed, 0);
+
+        // Check symbols file
+        let sym_file = root.join("test_lib.kicad_sym");
+        assert!(sym_file.exists());
+
+        // Check doc dir and datasheet
+        let doc_dir = root.join("test_lib.doc");
+        assert!(doc_dir.is_dir());
+        let doc_file = doc_dir.join("1N4148W-TP_C77978.pdf");
+        assert!(doc_file.exists());
+        let doc_bytes = fs::read(&doc_file).unwrap();
+        assert!(doc_bytes.starts_with(b"%PDF"));
+
+        // Check footprints (both suffixed and clean)
+        let fp_dir = root.join("test_lib.pretty");
+        assert!(fp_dir.is_dir());
+        let entries: Vec<_> = fs::read_dir(&fp_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(entries.iter().any(|name| name.ends_with(".kicad_mod")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_export_kicad_batch_without_datasheet() {
+        let root = std::env::temp_dir().join(format!("test_kicad_batch_nodoc_{}", std::process::id()));
+        let options = KicadBatchOptions {
+            ids: vec!["C77978".to_string()], // 1N4148W-TP
+            library: KicadLibraryOptions {
+                output: root.clone(),
+                library_name: Some("test_lib_nodoc".to_string()),
+                symbol_lib: None,
+                footprint_lib: None,
+                model_lib: None,
+                doc_lib: None,
+            },
+            export: KicadExportOptions {
+                symbol: true,
+                footprint: false,
+                model_3d: false,
+                full: false,
+                force: true,
+                kicad_version: KicadVersion::V6,
+                download_pdf: false,
+                add_suffix: true,
+                replace_dot: false,
+            },
+            english_metadata: false,
+            parallel: 1,
+            continue_on_error: false,
+            progress: None,
+        };
+
+        let summary = export_kicad_batch(options).await.unwrap();
+        assert_eq!(summary.success, 1);
+        assert_eq!(summary.datasheets.downloaded, 0);
+
+        let doc_file = root.join("test_lib_nodoc.doc").join("1N4148W-TP_C77978.pdf");
+        assert!(!doc_file.exists(), "Datasheet file should not exist when download_pdf is false");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_export_kicad_batch_without_suffix() {
+        let root = std::env::temp_dir().join(format!("test_kicad_batch_nosuf_{}", std::process::id()));
+        let options = KicadBatchOptions {
+            ids: vec!["C77978".to_string()], // 1N4148W-TP
+            library: KicadLibraryOptions {
+                output: root.clone(),
+                library_name: Some("test_lib_nosuf".to_string()),
+                symbol_lib: None,
+                footprint_lib: None,
+                model_lib: None,
+                doc_lib: None,
+            },
+            export: KicadExportOptions {
+                symbol: true,
+                footprint: true,
+                model_3d: true,
+                full: true,
+                force: true,
+                kicad_version: KicadVersion::V6,
+                download_pdf: true,
+                add_suffix: false,
+                replace_dot: false,
+            },
+            english_metadata: false,
+            parallel: 1,
+            continue_on_error: false,
+            progress: None,
+        };
+
+        let summary = export_kicad_batch(options).await.unwrap();
+        assert_eq!(summary.success, 1);
+
+        // Check doc dir has clean datasheet name if downloaded
+        let doc_dir = root.join("test_lib_nosuf.doc");
+        if summary.datasheets.downloaded > 0 {
+            let doc_file = doc_dir.join("1N4148W-TP.pdf");
+            assert!(doc_file.exists(), "Datasheet file should have clean name when add_suffix is false");
+        }
+        if doc_dir.is_dir() {
+            let entries: Vec<_> = fs::read_dir(&doc_dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+                .collect();
+            assert!(!entries.iter().any(|name| name.contains("_C77978")), "No suffixed doc should exist");
+        }
+
+        // Check symbol references clean footprint
+        let sym_file = root.join("test_lib_nosuf.kicad_sym");
+        let sym_content = fs::read_to_string(&sym_file).unwrap();
+        assert!(sym_content.contains(r#"(symbol "1N4148W-TP""#));
+
+        // Check footprint directory only has clean footprint
+        let fp_dir = root.join("test_lib_nosuf.pretty");
+        let entries: Vec<_> = fs::read_dir(&fp_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(!entries.iter().any(|name| name.contains("_C77978")), "No suffixed footprint should exist");
+
+        // Check 3D model directory only has clean 3D model
+        let model_dir = root.join("test_lib_nosuf.3dshapes");
+        if model_dir.is_dir() {
+            let entries: Vec<_> = fs::read_dir(&model_dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+                .collect();
+            assert!(!entries.iter().any(|name| name.contains("_C77978")), "No suffixed 3D model should exist");
+        }
+
+        let _ = fs::remove_dir_all(root);
     }
 }

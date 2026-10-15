@@ -192,6 +192,9 @@ pub enum KicadCommands {
         /// Existing 3D model library directory to append/update (.3dshapes)
         #[arg(long, value_name = "DIR")]
         model_lib: Option<PathBuf>,
+        /// Existing datasheet directory to append/update (.doc)
+        #[arg(long, value_name = "DIR")]
+        doc_lib: Option<PathBuf>,
         /// Replace existing KiCad symbol/footprint/3D outputs
         #[arg(long)]
         force: bool,
@@ -231,6 +234,9 @@ pub enum KicadCommands {
         /// Existing 3D model library directory to append/update (.3dshapes)
         #[arg(long, value_name = "DIR")]
         model_lib: Option<PathBuf>,
+        /// Existing datasheet directory to append/update (.doc)
+        #[arg(long, value_name = "DIR")]
+        doc_lib: Option<PathBuf>,
         /// Maximum number of exports to run at once
         #[arg(long, default_value_t = 4)]
         parallel: usize,

@@ -30,6 +30,7 @@ pub struct LibraryManager {
     model_lib_dir: PathBuf,
     model_lib_name: String,
     model_dir_name: String,
+    doc_lib_dir: PathBuf,
 }
 
 impl LibraryManager {
@@ -42,6 +43,7 @@ impl LibraryManager {
         let footprint_lib_dir = output_path.join(format!("{}.pretty", lib_name));
         let model_dir_name = format!("{}.3dshapes", lib_name);
         let model_lib_dir = output_path.join(&model_dir_name);
+        let doc_lib_dir = output_path.join(format!("{}.doc", lib_name));
         Self {
             output_path: output_path.to_path_buf(),
             lib_name: lib_name.clone(),
@@ -51,6 +53,7 @@ impl LibraryManager {
             model_lib_dir,
             model_lib_name: lib_name,
             model_dir_name,
+            doc_lib_dir,
         }
     }
 
@@ -64,6 +67,10 @@ impl LibraryManager {
             .model_lib
             .clone()
             .unwrap_or_else(|| args.output.join(format!("{}.3dshapes", lib_name)));
+        let doc_lib_dir = args
+            .doc_lib
+            .clone()
+            .unwrap_or_else(|| args.output.join(format!("{}.doc", lib_name)));
         let footprint_lib_name = Self::library_name_from_path(&footprint_lib_dir, ".pretty")?;
         let model_dir_name = Self::path_name(&model_lib_dir)?;
         let model_lib_name = Self::strip_required_suffix(&model_dir_name, ".3dshapes")?.to_string();
@@ -77,6 +84,7 @@ impl LibraryManager {
             model_lib_dir,
             model_lib_name,
             model_dir_name,
+            doc_lib_dir,
         })
     }
 
@@ -104,6 +112,10 @@ impl LibraryManager {
         &self.model_lib_dir
     }
 
+    pub fn doc_lib_dir(&self) -> &Path {
+        &self.doc_lib_dir
+    }
+
     /// Create necessary output directories
     pub fn create_directories(&self) -> Result<()> {
         if let Some(symbol_lib_path) = &self.symbol_lib_override {
@@ -119,6 +131,8 @@ impl LibraryManager {
         fs::create_dir_all(&self.footprint_lib_dir).map_err(KicadError::Io)?;
 
         fs::create_dir_all(&self.model_lib_dir).map_err(KicadError::Io)?;
+
+        fs::create_dir_all(&self.doc_lib_dir).map_err(KicadError::Io)?;
 
         Ok(())
     }
@@ -454,6 +468,19 @@ impl LibraryManager {
         self.model_lib_dir.join(format!("{}.step", model_name))
     }
 
+    /// Get the path for a datasheet PDF file
+    pub fn get_doc_path(&self, doc_name: &str) -> PathBuf {
+        self.doc_lib_dir.join(format!("{}.pdf", doc_name))
+    }
+
+    /// Write datasheet PDF file
+    pub fn write_doc_file(&self, doc_name: &str, data: &[u8]) -> Result<PathBuf> {
+        let doc_path = self.get_doc_path(doc_name);
+        Self::atomic_write(&doc_path, data, 256 * 1024).map_err(KicadError::Io)?;
+        log::info!("Wrote datasheet PDF: {}", doc_path.display());
+        Ok(doc_path)
+    }
+
     /// Get the symbol library path
     pub fn get_symbol_lib_path(&self) -> PathBuf {
         if let Some(path) = &self.symbol_lib_override {
@@ -518,6 +545,7 @@ mod tests {
             symbol_lib: None,
             footprint_lib: None,
             model_lib: None,
+            doc_lib: None,
         };
 
         let manager = LibraryManager::from_options(&options).unwrap();
@@ -528,6 +556,7 @@ mod tests {
         assert_eq!(manager.footprint_lib_name(), "custom");
         assert_eq!(manager.model_lib_name(), "custom");
         assert_eq!(manager.model_dir_name(), "custom.3dshapes");
+        assert_eq!(manager.doc_lib_dir(), PathBuf::from("out").join("custom.doc"));
     }
 
     #[test]
@@ -538,6 +567,7 @@ mod tests {
             symbol_lib: Some(PathBuf::from("libs/custom.kicad_sym")),
             footprint_lib: Some(PathBuf::from("pcb/board.pretty")),
             model_lib: Some(PathBuf::from("assets/parts.3dshapes")),
+            doc_lib: Some(PathBuf::from("docs/parts.doc")),
         };
 
         let manager = LibraryManager::from_options(&options).unwrap();
@@ -548,6 +578,7 @@ mod tests {
         assert_eq!(manager.footprint_lib_name(), "board");
         assert_eq!(manager.model_lib_name(), "parts");
         assert_eq!(manager.model_dir_name(), "parts.3dshapes");
+        assert_eq!(manager.doc_lib_dir(), PathBuf::from("docs/parts.doc"));
     }
 
     #[test]
@@ -556,6 +587,7 @@ mod tests {
         let symbol_lib = root.join("symbols").join("custom.kicad_sym");
         let footprint_lib = root.join("footprints").join("board.pretty");
         let model_lib = root.join("models").join("parts.3dshapes");
+        let doc_lib = root.join("docs").join("parts.doc");
 
         let options = KicadLibraryOptions {
             output: root.clone(),
@@ -563,6 +595,7 @@ mod tests {
             symbol_lib: Some(symbol_lib.clone()),
             footprint_lib: Some(footprint_lib.clone()),
             model_lib: Some(model_lib.clone()),
+            doc_lib: Some(doc_lib.clone()),
         };
 
         let manager = LibraryManager::from_options(&options).unwrap();
@@ -571,6 +604,7 @@ mod tests {
         assert!(symbol_lib.parent().unwrap().exists());
         assert!(footprint_lib.is_dir());
         assert!(model_lib.is_dir());
+        assert!(doc_lib.is_dir());
 
         manager
             .add_or_update_component(
