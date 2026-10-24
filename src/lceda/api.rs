@@ -1,3 +1,6 @@
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode, Url};
@@ -112,14 +115,29 @@ impl LcedaClient {
         Ok(seed_uuid.to_string())
     }
 
-    pub async fn download_step_bytes(&self, model_uuid: &str) -> Result<Vec<u8>> {
+    pub async fn download_step_bytes(&self, model_uuid: &str) -> Result<Arc<Vec<u8>>> {
         if let Some(uuid) = easyeda_fallback::easyeda_step_uuid(model_uuid) {
             return crate::easyeda::EasyedaApi::new()
                 .download_3d_step(uuid)
                 .await;
         }
         let url = format!("{STEP_API}/{model_uuid}");
-        self.get_bytes(&url).await
+        Ok(Arc::new(self.get_bytes(&url).await?))
+    }
+
+    /// Downloads a model straight into `path`. A batch asks for one model per
+    /// parallel part, so writing them to disk as they arrive keeps the batch's peak
+    /// from following the number of parts.
+    pub async fn download_step_bytes_to_file(&self, model_uuid: &str, path: &Path) -> Result<()> {
+        if let Some(uuid) = easyeda_fallback::easyeda_step_uuid(model_uuid) {
+            return crate::easyeda::EasyedaApi::new()
+                .download_3d_step_to_file(uuid, path)
+                .await;
+        }
+        let url = format!("{STEP_API}/{model_uuid}");
+        let bytes = self.get_bytes(&url).await?;
+        fs::write(path, bytes)?;
+        Ok(())
     }
 
     pub async fn download_obj_bytes(&self, model_uuid: &str) -> Result<Vec<u8>> {

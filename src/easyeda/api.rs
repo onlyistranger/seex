@@ -1,10 +1,12 @@
 use crate::easyeda::models::{ApiResponse, ComponentData, Model3dInfo, SymbolPartData};
 use crate::error::{AppError, EasyedaError, Result};
 use futures_util::StreamExt;
-use reqwest::header::ACCEPT_ENCODING;
 use reqwest::{Client, StatusCode};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, OnceCell};
 
@@ -18,6 +20,15 @@ const UPSTREAM_BLOCK_COOLDOWN_MS: u64 = 45_000;
 const COMPONENT_REQUEST_INTERVAL_MS: u64 = 150;
 const MODEL_REQUEST_INTERVAL_MS: u64 = 150;
 const MODEL_DOWNLOAD_BASE_URL: &str = "https://modules.lceda.cn/qAxj6KHrDKw4blvCG8QJPs7Y";
+/// How many downloaded models the cache keeps.
+///
+/// The models are the largest thing a run holds: a 25-part batch of them was
+/// 40MB on disk, and every one of them stayed in memory until the batch ended,
+/// so the peak followed the size of the batch rather than the handful being
+/// worked on at once. A model is asked for once, or twice when a bundle writes
+/// it as a file and embeds it as well, so a few entries are enough to keep that
+/// from downloading twice, and the rest are released as they are finished with.
+const CACHED_MODELS: usize = 4;
 type DownloadCell = Arc<OnceCell<std::result::Result<Arc<Vec<u8>>, String>>>;
 type DownloadCache = Arc<Mutex<HashMap<String, DownloadCell>>>;
 
@@ -27,6 +38,45 @@ pub struct EasyedaApi {
     step_cache: DownloadCache,
     component_gate: Arc<Mutex<RequestGate>>,
     model_gate: Arc<Mutex<RequestGate>>,
+}
+
+/// Where a downloaded model goes.
+///
+/// A merge asks for one model per parallel part, so a batch of a few hundred parts
+/// held dozens of them in memory while they arrived. Writing the download straight
+/// into a file keeps only the chunk being received in memory; the caller reads the
+/// model back when it has to look at the geometry.
+#[derive(Debug, Clone, Copy)]
+enum ModelSink<'a> {
+    Memory,
+    File(&'a Path),
+}
+
+/// One HTTP client per kind of request for the whole process.
+///
+/// An [`EasyedaApi`] is built per call in a few places, and a fresh client would
+/// open a fresh connection for every one of them — a batch makes hundreds of these
+/// calls, so the connections are worth keeping. Cloning a `Client` shares its pool.
+fn shared_client(for_models: bool) -> Client {
+    static COMPONENT_CLIENT: OnceLock<Client> = OnceLock::new();
+    static MODEL_CLIENT: OnceLock<Client> = OnceLock::new();
+    let cell = if for_models {
+        &MODEL_CLIENT
+    } else {
+        &COMPONENT_CLIENT
+    };
+    cell.get_or_init(|| {
+        let idle_per_host = if for_models { 32 } else { 10 };
+        Client::builder()
+            .user_agent(format!("seex/{}", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .read_timeout(std::time::Duration::from_secs(30))
+            .pool_max_idle_per_host(idle_per_host)
+            .http2_adaptive_window(true)
+            .build()
+            .expect("Failed to create HTTP client")
+    })
+    .clone()
 }
 
 #[derive(Debug)]
@@ -45,21 +95,8 @@ impl RequestGate {
 impl EasyedaApi {
     pub fn new() -> Self {
         Self {
-            client: Client::builder()
-                .user_agent(format!("seex/{}", env!("CARGO_PKG_VERSION")))
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .read_timeout(std::time::Duration::from_secs(30))
-                .pool_max_idle_per_host(10)
-                .http2_adaptive_window(true)
-                .build()
-                .expect("Failed to create HTTP client"),
-            model_client: Client::builder()
-                .user_agent(format!("seex/{}", env!("CARGO_PKG_VERSION")))
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .read_timeout(std::time::Duration::from_secs(30))
-                .pool_max_idle_per_host(32)
-                .build()
-                .expect("Failed to create model HTTP client"),
+            client: shared_client(false),
+            model_client: shared_client(true),
             step_cache: Arc::new(Mutex::new(HashMap::new())),
             component_gate: Arc::new(Mutex::new(RequestGate::new())),
             model_gate: Arc::new(Mutex::new(RequestGate::new())),
@@ -386,9 +423,22 @@ impl EasyedaApi {
                         .get("title")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
+                    // The model is drawn in the footprint only after applying `c_rotation`;
+                    // dropping it leaves every footprint whose model is rotated at 90
+                    // degrees with the 3D body across the pads instead of on them.
+                    let rotation_z = attrs
+                        .get("c_rotation")
+                        .and_then(|v| v.as_str())
+                        .and_then(|text| text.split(',').nth(2))
+                        .and_then(|value| value.trim().parse::<f64>().ok())
+                        .unwrap_or(0.0);
 
                     if let (Some(uuid), Some(title)) = (uuid, title) {
-                        return Some(Model3dInfo { uuid, title });
+                        return Some(Model3dInfo {
+                            uuid,
+                            title,
+                            rotation_z,
+                        });
                     }
                 }
             }
@@ -396,7 +446,7 @@ impl EasyedaApi {
         None
     }
 
-    pub async fn download_3d_step(&self, uuid: &str) -> Result<Vec<u8>> {
+    pub async fn download_3d_step(&self, uuid: &str) -> Result<Arc<Vec<u8>>> {
         let url = format!("{MODEL_DOWNLOAD_BASE_URL}/{uuid}");
         let cell = {
             let mut cache = self.step_cache.lock().await;
@@ -408,20 +458,55 @@ impl EasyedaApi {
 
         let result = cell
             .get_or_init(|| async {
-                self.download_with_retry(&url, "STEP", uuid)
+                self.download_with_retry(&url, "STEP", uuid, ModelSink::Memory)
                     .await
-                    .map(Arc::new)
+                    .map(|bytes| Arc::new(bytes.expect("a memory download returns its bytes")))
                     .map_err(|e| e.to_string())
             })
             .await
             .clone();
 
         match result {
-            Ok(bytes) => Ok(bytes.as_ref().clone()),
+            // Handing back the cached buffer rather than a copy of it: a model is a
+            // megabyte or so, and a batch has one in flight per parallel part.
+            Ok(bytes) => {
+                self.trim_step_cache(uuid).await;
+                Ok(bytes)
+            }
             Err(message) => {
                 self.step_cache.lock().await.remove(uuid);
                 Err(EasyedaError::InvalidData(message).into())
             }
+        }
+    }
+
+    /// Downloads a model straight into `path`, for a batch that would otherwise
+    /// hold one model in memory per parallel part while they are in flight.
+    pub async fn download_3d_step_to_file(&self, uuid: &str, path: &Path) -> Result<()> {
+        let url = format!("{MODEL_DOWNLOAD_BASE_URL}/{uuid}");
+        self.download_with_retry(&url, "STEP", uuid, ModelSink::File(path))
+            .await?;
+        Ok(())
+    }
+
+    /// Keeps the cache to [`CACHED_MODELS`] finished downloads, oldest first, so
+    /// a long batch does not hold every model it has seen. `keep` is the one that
+    /// was just used, and anything still downloading is left alone.
+    async fn trim_step_cache(&self, keep: &str) {
+        let mut cache = self.step_cache.lock().await;
+        if cache.len() <= CACHED_MODELS {
+            return;
+        }
+        let stale: Vec<String> = cache
+            .iter()
+            .filter(|(uuid, cell)| {
+                uuid.as_str() != keep && cell.get().is_some_and(|done| done.is_ok())
+            })
+            .map(|(uuid, _)| uuid.clone())
+            .take(cache.len() - CACHED_MODELS)
+            .collect();
+        for uuid in stale {
+            cache.remove(&uuid);
         }
     }
 
@@ -430,7 +515,8 @@ impl EasyedaApi {
         url: &str,
         model_type: &str,
         uuid: &str,
-    ) -> Result<Vec<u8>> {
+        sink: ModelSink<'_>,
+    ) -> Result<Option<Vec<u8>>> {
         for attempt in 1..=STEP_DOWNLOAD_ATTEMPTS {
             log::info!(
                 "Downloading 3D {} model: {}{}",
@@ -445,7 +531,7 @@ impl EasyedaApi {
 
             let result = tokio::time::timeout(
                 Duration::from_secs(STEP_DOWNLOAD_TOTAL_TIMEOUT_SECS),
-                self.download_once(url, model_type, uuid),
+                self.download_once(url, model_type, uuid, sink),
             )
             .await;
 
@@ -474,17 +560,25 @@ impl EasyedaApi {
         unreachable!()
     }
 
-    async fn download_once(&self, url: &str, model_type: &str, uuid: &str) -> Result<Vec<u8>> {
+    async fn download_once(
+        &self,
+        url: &str,
+        model_type: &str,
+        uuid: &str,
+        sink: ModelSink<'_>,
+    ) -> Result<Option<Vec<u8>>> {
         wait_for_request_slot(
             &self.model_gate,
             Duration::from_millis(MODEL_REQUEST_INTERVAL_MS),
         )
         .await;
 
+        // Models are STEP text, which compresses several times over, so the client is
+        // left to ask for a compressed body (`gzip` is enabled for reqwest and is
+        // decoded transparently).
         let response = self
             .model_client
             .get(url)
-            .header(ACCEPT_ENCODING, "identity")
             .send()
             .await
             .map_err(EasyedaError::ApiRequest)?;
@@ -515,10 +609,34 @@ impl EasyedaApi {
             .into());
         }
 
-        read_response_body(response, STEP_DOWNLOAD_STALL_TIMEOUT_SECS)
-            .await
-            .map_err(EasyedaError::InvalidData)
-            .map_err(Into::into)
+        match sink {
+            ModelSink::Memory => read_response_body(response, STEP_DOWNLOAD_STALL_TIMEOUT_SECS)
+                .await
+                .map(Some)
+                .map_err(EasyedaError::InvalidData)
+                .map_err(Into::into),
+            ModelSink::File(path) => {
+                let mut writer = BufWriter::new(File::create(path)?);
+                match read_response_body_into(
+                    response,
+                    STEP_DOWNLOAD_STALL_TIMEOUT_SECS,
+                    &mut writer,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        writer.flush()?;
+                        Ok(None)
+                    }
+                    Err(message) => {
+                        // A half written model must not be mistaken for a model.
+                        drop(writer);
+                        let _ = fs::remove_file(path);
+                        Err(EasyedaError::InvalidData(message).into())
+                    }
+                }
+            }
+        }
     }
 
     async fn backoff_delay(attempt: u32) {
@@ -647,15 +765,30 @@ async fn read_response_body(
     response: reqwest::Response,
     stall_timeout_secs: u64,
 ) -> std::result::Result<Vec<u8>, String> {
-    let mut body = Vec::new();
+    // A model is a megabyte or so and the length is known up front, so reserving
+    // it once keeps the buffer from being reallocated and copied as it grows.
+    let expected = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(0);
+    let mut body = Vec::with_capacity(expected);
+    read_response_body_into(response, stall_timeout_secs, &mut body).await?;
+    Ok(body)
+}
+
+async fn read_response_body_into<W: Write>(
+    response: reqwest::Response,
+    stall_timeout_secs: u64,
+    sink: &mut W,
+) -> std::result::Result<(), String> {
     let mut stream = response.bytes_stream();
     let stall_timeout = Duration::from_secs(stall_timeout_secs);
 
     loop {
         match tokio::time::timeout(stall_timeout, stream.next()).await {
-            Ok(Some(Ok(chunk))) => body.extend_from_slice(&chunk),
+            Ok(Some(Ok(chunk))) => sink.write_all(&chunk).map_err(|error| error.to_string())?,
             Ok(Some(Err(error))) => return Err(error.to_string()),
-            Ok(None) => return Ok(body),
+            Ok(None) => return Ok(()),
             Err(_) => {
                 return Err(format!(
                     "STEP download stalled for more than {}s",
@@ -711,6 +844,33 @@ fn is_not_found_api_message(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_3d_model_rotation_from_the_footprint_outline() {
+        // Real shape row of an LCSC SOP-8 footprint (trimmed): the model is stored rotated by 90
+        // degrees and has to keep that rotation, or the exported 3D body lands across the pads.
+        let shapes = vec![
+            r#"SVGNODE~{"attrs":{"uuid":"765d86d5","title":"SOP-8_L5.0-W4.0-H1.8-LS6.2-P1.27","c_etype":"outline3D","c_origin":"4001,2998","c_width":"24.4094","c_height":"19.685","c_rotation":"0,0,90"}}"#
+                .to_string(),
+        ];
+
+        let model = EasyedaApi::extract_3d_model_from_svgnode(&shapes).expect("model metadata");
+
+        assert_eq!(model.uuid, "765d86d5");
+        assert_eq!(model.title, "SOP-8_L5.0-W4.0-H1.8-LS6.2-P1.27");
+        assert_eq!(model.rotation_z, 90.0);
+    }
+
+    #[test]
+    fn defaults_to_no_rotation_without_outline_data() {
+        let shapes = vec![
+            r#"SVGNODE~{"attrs":{"uuid":"abc","title":"BODY","c_etype":"outline3D"}}"#.to_string(),
+        ];
+
+        let model = EasyedaApi::extract_3d_model_from_svgnode(&shapes).expect("model metadata");
+
+        assert_eq!(model.rotation_z, 0.0);
+    }
 
     #[test]
     fn recognizes_html_forbidden_as_upstream_block() {

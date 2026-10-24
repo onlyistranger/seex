@@ -164,16 +164,30 @@ impl MonitorState {
         }
 
         if !self.initialized {
-            self.last_content = trimmed;
-            self.initialized = true;
-            self.add_debug_log("Listener initialized".to_string());
-            return false;
+            // On initialization, check if content has IDs we care about
+            let extracted_ids = extract_lcsc_ids(&trimmed);
+            if !extracted_ids.is_empty() {
+                // Initialize and process this content since it has valid IDs
+                self.last_content = trimmed.clone();
+                self.initialized = true;
+                self.add_debug_log("Listener initialized with valid content".to_string());
+                self.record_import(trimmed, "Initial content");
+                return true;
+            } else {
+                // Just initialize without processing
+                self.last_content = trimmed;
+                self.initialized = true;
+                self.add_debug_log("Listener initialized".to_string());
+                return false;
+            }
         }
 
+        // Check if content has changed
         if trimmed == self.last_content {
             return false;
         }
 
+        // Update last_content and process
         self.last_content = trimmed.clone();
         self.record_import(trimmed, "New content");
         true
@@ -354,14 +368,25 @@ impl MonitorState {
     pub fn clear_all(&mut self) {
         self.history.clear();
         self.matched.clear();
-        self.last_content.clear();
-        self.initialized = false;
+        // What is on the clipboard stays there, and the record of what has been
+        // imported is kept so the monitor recognises it and leaves the cleared
+        // lists alone. Forgetting that record was the original bug — everything
+        // came straight back. Arming a "skip the next read" instead was worse:
+        // if the user copied something new in the next instant, that new copy
+        // was the read that got skipped, and it was never imported at all.
+        self.initialized = true;
         self.match_debug_log.clear();
         self.export_last_result = None;
         self.export_running = false;
         self.export_progress = None;
         self.bom_last_result = None;
         self.bom_running = false;
+    }
+
+    /// Drops the import history, leaving the matched ids alone: the history is
+    /// the log of what was on the clipboard, the matches are what the user keeps.
+    pub fn clear_history(&mut self) {
+        self.history.clear();
     }
 
     pub fn get_unique_ids(&self) -> Vec<String> {
@@ -390,23 +415,37 @@ impl MonitorHandle {
         let poll_thread = thread::spawn(move || {
             thread::sleep(Duration::from_millis(500));
             let mut clipboard: Option<Clipboard> = None;
+            let mut consecutive_errors = 0u32;
 
             while !stop_poll.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(300));
 
                 if clipboard.is_none() {
                     clipboard = Clipboard::new().ok();
+                    if clipboard.is_none() {
+                        consecutive_errors += 1;
+                        // Exponential backoff on repeated failures
+                        if consecutive_errors > 3 {
+                            thread::sleep(Duration::from_millis(1000));
+                        }
+                        continue;
+                    }
                 }
 
                 if let Some(ref mut clip) = clipboard {
                     match clip.get_text() {
                         Ok(content) => {
+                            consecutive_errors = 0;
                             if let Ok(mut s) = state_poll.lock() {
                                 s.process_clipboard_change(content);
                             }
                         }
                         Err(_) => {
-                            clipboard = None;
+                            consecutive_errors += 1;
+                            // Only reset clipboard handle after multiple consecutive errors
+                            if consecutive_errors > 5 {
+                                clipboard = None;
+                            }
                         }
                     }
                 }
@@ -475,5 +514,70 @@ mod tests {
             )
         );
         assert_eq!(state.get_unique_ids(), vec!["C2927505", "C2040"]);
+    }
+
+    #[test]
+    fn clearing_leaves_the_lists_empty_and_keeps_capturing() {
+        let mut state = MonitorState::new();
+
+        assert!(state.process_clipboard_change("C2040".to_string()));
+        assert_eq!(state.get_unique_ids(), vec!["C2040"]);
+        assert_eq!(state.history.len(), 1);
+
+        state.clear_all();
+
+        // The clipboard still holds what was cleared: polling it again must not
+        // bring it back.
+        assert!(!state.process_clipboard_change("C2040".to_string()));
+        assert!(state.matched.is_empty(), "matched must stay empty");
+        assert!(state.history.is_empty(), "history must stay empty");
+
+        // A copy made right after clearing is a new sighting and must be
+        // captured. Skipping the next read to make the clear stick swallowed
+        // exactly this one, which is why capturing appeared to stop.
+        assert!(state.process_clipboard_change("C4242".to_string()));
+        assert_eq!(state.get_unique_ids(), vec!["C4242"]);
+        assert_eq!(state.history.len(), 1);
+    }
+
+    #[test]
+    fn a_deleted_match_stays_deleted_until_the_clipboard_changes() {
+        let mut state = MonitorState::new();
+        state.process_clipboard_change("C2040\nC4242".to_string());
+        let matched = |state: &MonitorState, id: &str| {
+            state.get_unique_ids().iter().any(|matched| matched == id)
+        };
+        assert!(matched(&state, "C2040") && matched(&state, "C4242"));
+
+        let index = state
+            .matched
+            .iter()
+            .position(|entry| entry.lcsc_id == "C2040")
+            .expect("C2040 was matched");
+        state.delete_matched(index);
+
+        // The same clipboard is not read a second time, so the deletion holds.
+        assert!(!state.process_clipboard_change("C2040\nC4242".to_string()));
+        assert!(!matched(&state, "C2040"), "the deleted id must stay gone");
+        assert!(matched(&state, "C4242"));
+
+        // Copying it again is a new sighting, and that brings it back.
+        assert!(state.process_clipboard_change("C2040".to_string()));
+        assert!(matched(&state, "C2040"));
+    }
+
+    #[test]
+    fn clearing_the_history_leaves_the_matched_ids_alone() {
+        let mut state = MonitorState::new();
+        state.process_clipboard_change("C2040".to_string());
+
+        state.clear_history();
+
+        assert!(state.history.is_empty());
+        assert_eq!(state.get_unique_ids(), vec!["C2040"]);
+        assert!(
+            !state.process_clipboard_change("C2040".to_string()),
+            "the same clipboard is not imported twice"
+        );
     }
 }

@@ -443,7 +443,8 @@ pub fn convert_footprint(
     add_generated_courtyard_if_missing(&mut ki_footprint, &converter);
 
     // Add 3D model reference if available
-    if let Some((clean_m, suffixed_m)) = &clean_model_info
+    if let (Some(model_info), Some((clean_m, suffixed_m))) =
+        (&component_data.model_3d, &clean_model_info)
         && args.targets_model_3d()
     {
         let model_name = if args.add_suffix { suffixed_m } else { clean_m };
@@ -456,9 +457,16 @@ pub fn convert_footprint(
 
         ki_footprint.model_3d = Some(kicad::Ki3dModel {
             path: model_path,
+            // The model's own coordinates already place it: its rotation is the only thing the
+            // exported footprint adds, and the STEP itself is lifted onto the board plane when it
+            // is written (see `crate::step_model`).
             offset: (0.0, 0.0, 0.0),
             scale: (1.0, 1.0, 1.0),
-            rotate: (0.0, 0.0, 0.0),
+            rotate: (
+                0.0,
+                0.0,
+                crate::util::model_rotation_z(model_info.rotation_z),
+            ),
         });
     }
 
@@ -481,7 +489,8 @@ pub fn convert_footprint(
         let mut clean_footprint = ki_footprint.clone();
         clean_footprint.name = clean_fp_name.clone();
 
-        if let Some((clean_m, _)) = &clean_model_info
+        if let (Some(model_info), Some((clean_m, _))) =
+            (&component_data.model_3d, &clean_model_info)
             && args.targets_model_3d()
         {
             let model_lib_name = lib_manager.model_lib_name();
@@ -495,7 +504,11 @@ pub fn convert_footprint(
                 path: model_path,
                 offset: (0.0, 0.0, 0.0),
                 scale: (1.0, 1.0, 1.0),
-                rotate: (0.0, 0.0, 0.0),
+                rotate: (
+                    0.0,
+                    0.0,
+                    crate::util::model_rotation_z(model_info.rotation_z),
+                ),
             });
         }
 
@@ -850,6 +863,7 @@ mod tests {
             model_3d: Some(crate::easyeda::Model3dInfo {
                 uuid: "dummy-uuid".to_string(),
                 title: "CONN-TH_XT30PW-M".to_string(),
+                rotation_z: 0.0,
             }),
             manufacturer: "".to_string(),
             datasheet: "".to_string(),
@@ -912,6 +926,7 @@ mod tests {
             model_3d: Some(crate::easyeda::Model3dInfo {
                 uuid: "dummy-uuid".to_string(),
                 title: "CONN-TH_XT30PW-M".to_string(),
+                rotation_z: 0.0,
             }),
             manufacturer: "".to_string(),
             datasheet: "".to_string(),

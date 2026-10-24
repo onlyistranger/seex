@@ -31,7 +31,7 @@ pub struct ExportRequest {
     pub lcsc_english: bool,
     pub force: bool,
     pub schematic_stroke_color: [u8; 3],
-    pub schematic_fill_color: [u8; 3],
+    pub schematic_fill_color: Option<[u8; 3]>,
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
@@ -301,6 +301,7 @@ fn build_kicad_batch_options(
         english_metadata: req.lcsc_english,
         parallel: req.parallel.max(1),
         continue_on_error: req.continue_on_error,
+        append: req.append,
         progress,
     }
 }

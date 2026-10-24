@@ -13,6 +13,10 @@ use crate::error::Result;
 use crate::util::nested_string;
 
 const WHITE_BGR: i32 = 0xFFFFFF;
+/// The fill colour that means "no colour at all": the symbol keeps its outline
+/// and the body comes out transparent, whatever colour the source shape asked
+/// for.
+pub const NO_FILL_BGR: i32 = -1;
 const BODY_LINE_WIDTH_INDEX: i32 = 1;
 const GRAPHIC_LINE_WIDTH_INDEX: i32 = 1;
 const PIN_LENGTH_UNITS: f64 = 20.0;
@@ -92,6 +96,11 @@ fn build_component(
     color_bgr: i32,
     fill_color_bgr: i32,
 ) -> Result<Component> {
+    // A caller can ask for no fill colour at all. That sentinel wins over
+    // whatever fill the source shapes carried: they keep their outlines and
+    // their areas come out transparent.
+    let no_fill = fill_color_bgr == NO_FILL_BGR;
+    let fill_color_bgr = if no_fill { WHITE_BGR } else { fill_color_bgr };
     let rows = common::parse_easyeda_rows(payload)?;
     let mut parts: Vec<PartRaw> = Vec::new();
     let mut current_part_index = None;
@@ -413,8 +422,8 @@ fn build_component(
                 ),
                 color_bgr,
                 fill_color_bgr,
-                is_filled: true,
-                is_transparent: false,
+                is_filled: !no_fill,
+                is_transparent: no_fill,
                 line_width_index: BODY_LINE_WIDTH_INDEX,
                 owner_part_id: 1,
             });
@@ -451,8 +460,8 @@ fn build_component(
                     corner2: common::CoordPoint::from_symbol_units(rect.x2_units, rect.y2_units),
                     color_bgr,
                     fill_color_bgr: if complex { WHITE_BGR } else { fill_color_bgr },
-                    is_filled: !complex,
-                    is_transparent: complex,
+                    is_filled: !complex && !no_fill,
+                    is_transparent: complex || no_fill,
                     line_width_index: BODY_LINE_WIDTH_INDEX,
                     owner_part_id: rect.owner_part_id,
                 });
@@ -471,8 +480,8 @@ fn build_component(
                     ),
                     color_bgr,
                     fill_color_bgr: if complex { WHITE_BGR } else { fill_color_bgr },
-                    is_filled: !complex,
-                    is_transparent: complex,
+                    is_filled: !complex && !no_fill,
+                    is_transparent: complex || no_fill,
                     line_width_index: BODY_LINE_WIDTH_INDEX,
                     owner_part_id: part.owner_part_id,
                 });
@@ -520,13 +529,13 @@ fn build_component(
                 radius_x_raw: common::raw_from_symbol_units(ellipse.radius_x_units),
                 radius_y_raw: common::raw_from_symbol_units(ellipse.radius_y_units),
                 color_bgr,
-                fill_color_bgr: if ellipse.is_filled {
+                fill_color_bgr: if ellipse.is_filled && !no_fill {
                     fill_color_bgr
                 } else {
                     WHITE_BGR
                 },
-                is_filled: ellipse.is_filled,
-                is_transparent: ellipse.is_transparent,
+                is_filled: ellipse.is_filled && !no_fill,
+                is_transparent: ellipse.is_transparent || no_fill,
                 line_width_index: GRAPHIC_LINE_WIDTH_INDEX,
                 owner_part_id: ellipse.owner_part_id,
             });
@@ -2347,5 +2356,61 @@ mod tests {
         assert_eq!(left.length_raw, common::raw_from_symbol_units(15.0));
         assert_eq!(right.orientation, 0);
         assert_eq!(left.orientation, 2);
+    }
+
+    #[test]
+    fn a_sentinel_fill_colour_exports_a_transparent_area() {
+        let build = |fill: i32| {
+            super::build_component_from_payload_with_metadata_and_color(
+                &sample_payload(),
+                "TEST/COMP",
+                &SchlibMetadata::default(),
+                0x000000,
+                fill,
+            )
+            .unwrap()
+        };
+        let colored = build(0xFFFFE0);
+        let no_fill = build(super::NO_FILL_BGR);
+
+        assert!(!colored.rectangles.is_empty(), "the fixture draws a body");
+        assert!(
+            colored
+                .rectangles
+                .iter()
+                .all(|rect| rect.is_filled && !rect.is_transparent)
+        );
+        assert!(
+            no_fill
+                .rectangles
+                .iter()
+                .all(|rect| !rect.is_filled && rect.is_transparent),
+            "no colour must leave the body unfilled, whatever the shape asked for"
+        );
+
+        // Altium writes a boolean only when it is set, so "not filled" is the
+        // absence of `ISSOLID` rather than an `ISSOLID=F`.
+        let filled_text = schlib_text(&colored, "filled");
+        let none_text = schlib_text(&no_fill, "none");
+        assert!(filled_text.contains("|ISSOLID=T|"));
+        assert!(none_text.contains("|TRANSPARENT=T|"));
+        assert!(!none_text.contains("|ISSOLID=T|"));
+    }
+
+    /// Writes `component` to a scratch SchLib and returns its record text.
+    fn schlib_text(component: &super::Component, tag: &str) -> String {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("export_schlib_{tag}_{timestamp}.SchLib"));
+        super::write_schlib(component, &path).unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut compound = cfb::CompoundFile::open(file).unwrap();
+        let mut data_stream = compound.open_stream("/TEST_COMP/Data").unwrap();
+        let mut data = Vec::new();
+        data_stream.read_to_end(&mut data).unwrap();
+        String::from_utf8_lossy(&data).into_owned()
     }
 }

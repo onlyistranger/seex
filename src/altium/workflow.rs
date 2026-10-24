@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::{Value, to_string_pretty};
+use tokio::sync::Semaphore;
 
-use crate::altium::footprint::build_pcblib_from_payload;
-use crate::altium::pcblib::{PcbLibrary, write_pcblib};
+use crate::altium::footprint::build_pcblib_from_payload_with_model;
+use crate::altium::pcblib::{ModelData, PcbLibrary, scratch_step_path, write_pcblib};
 use crate::altium::schlib::{
     Component, SchlibMetadata, SchlibParameter,
     build_component_from_payload_with_metadata_and_color, write_schlib,
@@ -45,7 +47,8 @@ pub async fn download_step(
 
     let model_uuid = client.get_model_uuid(item).await?;
     let content = client.download_step_bytes(&model_uuid).await?;
-    fs::write(&out_file, content)?;
+    // The STEP is stored in LCEDA's own frame, which does not always rest on the board plane.
+    fs::write(&out_file, crate::step_model::place_step_on_board(&content))?;
     Ok(out_file)
 }
 
@@ -138,11 +141,17 @@ pub(crate) fn resolved_footprint_name(item: &SearchItem, payload: &Value) -> Str
     .unwrap_or_else(|| "footprint".to_string())
 }
 
-async fn load_step_bytes_for_pcblib(
-    client: &LcedaClient,
-    item: &SearchItem,
-    footprint_data: &Value,
-) -> Option<Vec<u8>> {
+/// How many models may be corrected at once.
+///
+/// Correcting a model has to have the whole model in memory, and a merge downloads one
+/// model per parallel part — so without this every part in flight would hold its own
+/// model while it is parsed and rewritten. Correcting is quick next to the download, so
+/// a handful at a time costs nothing and keeps the batch's peak down.
+const PLACEMENT_CONCURRENCY: usize = 8;
+static PLACEMENT_SLOTS: Semaphore = Semaphore::const_new(PLACEMENT_CONCURRENCY);
+
+/// The model ids worth trying for a footprint, most specific first.
+pub(crate) fn step_model_candidates(item: &SearchItem, footprint_data: &Value) -> Vec<String> {
     let mut model_candidates = Vec::new();
     if let Some(model_uuid) = nested_string(footprint_data, &["result", "model_3d", "uri"])
         .filter(|uuid| !uuid.trim().is_empty())
@@ -161,20 +170,75 @@ async fn load_step_bytes_for_pcblib(
             model_candidates.push(model_uuid);
         }
     }
+    model_candidates
+}
+
+/// Downloads the first model that answers and writes it out already placed on the
+/// board plane.
+///
+/// The batch has one of these in flight per parallel part, so the model goes from the
+/// network to a scratch file, is read once to work out its placement, and the placed
+/// model is written straight to its final scratch file. Nothing here holds a whole
+/// model longer than it takes to correct it.
+pub(crate) async fn load_placed_step_for_pcblib(
+    client: &LcedaClient,
+    item: &SearchItem,
+    model_candidates: &[String],
+) -> Option<ModelData> {
+    let mut candidates = model_candidates.to_vec();
     if item.model_uuid.is_some() {
         if let Ok(model_uuid) = client.get_model_uuid(item).await {
-            if !model_candidates
+            if !candidates
                 .iter()
                 .any(|existing| existing.eq_ignore_ascii_case(&model_uuid))
             {
-                model_candidates.push(model_uuid);
+                candidates.push(model_uuid);
             }
         }
     }
 
-    for model_uuid in model_candidates {
-        if let Ok(bytes) = client.download_step_bytes(&model_uuid).await {
-            return Some(bytes);
+    for model_uuid in candidates {
+        let downloaded = scratch_step_path();
+        if client
+            .download_step_bytes_to_file(&model_uuid, &downloaded)
+            .await
+            .is_err()
+        {
+            let _ = fs::remove_file(&downloaded);
+            continue;
+        }
+
+        // Only a few models are corrected at a time: each one has to be held whole
+        // while it is parsed and rewritten.
+        let _slot = PLACEMENT_SLOTS
+            .acquire()
+            .await
+            .expect("placement semaphore should remain open");
+
+        let bytes = match fs::read(&downloaded) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let _ = fs::remove_file(&downloaded);
+                continue;
+            }
+        };
+        let _ = fs::remove_file(&downloaded);
+
+        let placed = scratch_step_path();
+        let written = fs::File::create(&placed)
+            .map(BufWriter::new)
+            .ok()
+            .and_then(|mut writer| {
+                crate::step_model::write_placed_step(&bytes, &mut writer)
+                    .ok()
+                    .and_then(|_| writer.flush().ok())
+            });
+        drop(bytes);
+        match written {
+            Some(()) => return Some(ModelData::Scratch(placed)),
+            None => {
+                let _ = fs::remove_file(&placed);
+            }
         }
     }
 
@@ -187,8 +251,9 @@ pub(crate) async fn build_pcblib_library_from_detail(
     footprint_data: &Value,
     component_name: &str,
 ) -> Result<PcbLibrary> {
-    let step_bytes = load_step_bytes_for_pcblib(client, item, footprint_data).await;
-    build_pcblib_from_payload(footprint_data, component_name, step_bytes.as_deref())
+    let candidates = step_model_candidates(item, footprint_data);
+    let step_data = load_placed_step_for_pcblib(client, item, &candidates).await;
+    build_pcblib_from_payload_with_model(footprint_data, component_name, step_data)
 }
 
 pub(crate) fn build_schlib_component_from_detail(
@@ -394,7 +459,7 @@ pub async fn export_bundle(
         let path = out_dir.join(item.choose_step_filename());
         if force || !path.exists() {
             let content = client.download_step_bytes(&model_uuid).await?;
-            fs::write(&path, content)?;
+            fs::write(&path, crate::step_model::place_step_on_board(&content))?;
         }
         step_file = Some(path.clone());
         exported.insert("step".to_string(), path);

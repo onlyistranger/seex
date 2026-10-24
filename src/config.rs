@@ -14,6 +14,11 @@ pub struct AppConfig {
     pub ui_language: String,
     pub show_donate: bool,
     pub theme: String,
+    /// The Roman-script face chosen on the Font page; `None` keeps the
+    /// platform's own UI face.
+    pub latin_font: Option<String>,
+    /// The Han face, used as the fallback for CJK characters.
+    pub han_font: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -24,6 +29,8 @@ impl Default for AppConfig {
             ui_language: "english".to_string(),
             show_donate: true,
             theme: "ocean".to_string(),
+            latin_font: None,
+            han_font: None,
         }
     }
 }
@@ -60,7 +67,9 @@ pub struct ExportConfig {
     pub force: bool,
     #[serde(alias = "schematic_color")]
     pub schematic_stroke_color: [u8; 3],
-    pub schematic_fill_color: [u8; 3],
+    /// `None` is the "no colour" choice: the symbol body is exported without a
+    /// fill rather than painted in some default.
+    pub schematic_fill_color: Option<[u8; 3]>,
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
@@ -82,7 +91,7 @@ impl Default for ExportConfig {
             force: false,
             // Preserve the existing Altium symbol colors as the initial choices.
             schematic_stroke_color: [11, 56, 104],
-            schematic_fill_color: [255, 255, 224],
+            schematic_fill_color: Some([255, 255, 224]),
             download_pdf: true,
             add_suffix: true,
             replace_dot: false,

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,15 +9,17 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use crate::altium::footprint::build_pcblib_from_payload_with_model;
 use crate::altium::merge::{
     PcblibRecordLibrary, SchlibRecord, normalize_lcsc_id, pcblib_records_from_library,
     read_pcblib_records, read_schlib_records, schlib_record_from_component, write_pcblib_records,
     write_schlib_records,
 };
-use crate::altium::pcblib::{PcbLibrary, write_pcblib};
+use crate::altium::pcblib::{PcbLibrary, scratch_payload_path, write_pcblib};
+use crate::altium::schlib::NO_FILL_BGR;
 use crate::altium::workflow::{
-    build_pcblib_library_from_detail, build_schlib_component_from_detail_with_color, export_pcblib,
-    export_schlib_with_options, resolved_footprint_name,
+    build_schlib_component_from_detail_with_color, export_pcblib, export_schlib_with_options,
+    load_placed_step_for_pcblib, resolved_footprint_name, step_model_candidates,
 };
 use crate::error::{AppError, Result};
 use crate::lceda::{LcedaClient, SearchItem};
@@ -40,8 +42,20 @@ pub struct BatchOptions {
     pub english_metadata: bool,
     pub force: bool,
     pub schematic_stroke_color: [u8; 3],
-    pub schematic_fill_color: [u8; 3],
+    /// `None` exports the symbol body with no fill at all.
+    pub schematic_fill_color: Option<[u8; 3]>,
     pub progress: Option<ExportProgressCallback>,
+}
+
+/// The Altium colour integer for a configured `#RRGGBB`.
+fn color_bgr(color: [u8; 3]) -> i32 {
+    color[0] as i32 | ((color[1] as i32) << 8) | ((color[2] as i32) << 16)
+}
+
+/// The same for an optional colour, where "no colour" is the sentinel the
+/// SchLib writer turns into a transparent area.
+fn fill_bgr(color: Option<[u8; 3]>) -> i32 {
+    color.map_or(NO_FILL_BGR, color_bgr)
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +121,7 @@ pub async fn export_batch(client: &LcedaClient, options: BatchOptions) -> Result
         batch_mode_label(&options),
         targets,
         &options.output,
+        pending.clone(),
         options.progress.clone(),
     );
     if summary.skipped > 0 {
@@ -195,7 +210,22 @@ struct MergeArtifacts {
     identity: String,
     component_name: String,
     schlib_record: Option<SchlibRecord>,
+    /// The built part, for a merge that assembles the library from parts.
     pcblib_library: Option<PcbLibrary>,
+    /// The same part already reduced to the streams a merged library holds, for an
+    /// append merge. Only one of the two is ever set.
+    pcblib_records: Option<PcblibRecordLibrary>,
+}
+
+/// Reduces a built part to its record form as soon as it is built.
+///
+/// An append merge only needs the streams, so keeping the structured library would
+/// hold every exported part in memory until the whole batch had finished.
+fn into_pcblib_records(mut artifacts: IndexedMergeArtifacts) -> Result<IndexedMergeArtifacts> {
+    if let Some(library) = artifacts.artifacts.pcblib_library.take() {
+        artifacts.artifacts.pcblib_records = Some(pcblib_records_from_library(&library)?);
+    }
+    Ok(artifacts)
 }
 
 #[derive(Debug)]
@@ -210,6 +240,52 @@ struct IndexedId {
     id: String,
 }
 
+/// A fetched component payload, parked on disk until the component is built.
+///
+/// A merge fetches every component's symbol and footprint before it builds any of
+/// them, so holding the parsed payloads put the whole batch's JSON in memory (a few
+/// hundred parts is tens of megabytes). Writing each payload out as it arrives and
+/// reading it back in the build keeps only the parts being worked on in memory. A
+/// payload that cannot be written just stays in memory rather than failing the run.
+#[derive(Debug)]
+enum Payload {
+    File(PathBuf),
+    Inline(Box<Value>),
+}
+
+impl Payload {
+    fn store(value: Value) -> Self {
+        let path = scratch_payload_path();
+        if let Ok(mut writer) = File::create(&path).map(BufWriter::new) {
+            if serde_json::to_writer(&mut writer, &value).is_ok() && writer.flush().is_ok() {
+                return Payload::File(path);
+            }
+            let _ = fs::remove_file(&path);
+        }
+        Payload::Inline(Box::new(value))
+    }
+
+    fn load(&self) -> Result<Value> {
+        match self {
+            Payload::Inline(value) => Ok((**value).clone()),
+            Payload::File(path) => {
+                let file = File::open(path)?;
+                serde_json::from_reader(file).map_err(|err| {
+                    AppError::InvalidResponse(format!("could not read a fetched payload: {err}"))
+                })
+            }
+        }
+    }
+}
+
+impl Drop for Payload {
+    fn drop(&mut self) {
+        if let Payload::File(path) = self {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct PreparedMergeComponent {
     index: usize,
@@ -218,8 +294,9 @@ struct PreparedMergeComponent {
     identity: String,
     component_name_base: String,
     footprint_name_base: String,
-    symbol_data: Option<Value>,
-    footprint_data: Option<Value>,
+    step_candidates: Vec<String>,
+    symbol_data: Option<Payload>,
+    footprint_data: Option<Payload>,
     english_metadata: Option<LcscProduct>,
 }
 
@@ -231,8 +308,9 @@ struct NamedMergeComponent {
     identity: String,
     component_name: String,
     footprint_name: String,
-    symbol_data: Option<Value>,
-    footprint_data: Option<Value>,
+    step_candidates: Vec<String>,
+    symbol_data: Option<Payload>,
+    footprint_data: Option<Payload>,
     english_metadata: Option<LcscProduct>,
 }
 
@@ -250,6 +328,10 @@ struct BatchProgress {
     parallel: usize,
     started_at: Instant,
     last_subject: Option<String>,
+    /// The ids this run will export, in the order they are handed out. The bar
+    /// names the ones in flight from this and the counters, so nothing has to
+    /// report each part individually for the label to stay current.
+    queue: Vec<String>,
     last_render_width: usize,
     progress: Option<ExportProgressCallback>,
 }
@@ -261,6 +343,7 @@ impl BatchProgress {
         mode_label: &str,
         targets: ExportTargets,
         output: &Path,
+        queue: Vec<String>,
         progress_callback: Option<ExportProgressCallback>,
     ) -> Self {
         eprintln!(
@@ -279,6 +362,7 @@ impl BatchProgress {
             parallel: parallel.max(1),
             started_at: Instant::now(),
             last_subject: None,
+            queue,
             last_render_width: 0,
             progress: progress_callback,
         };
@@ -304,21 +388,21 @@ impl BatchProgress {
     fn record_success(&mut self, id: &str, detail: Option<&str>) {
         self.completed = (self.completed + 1).min(self.total);
         self.success += 1;
-        self.last_subject = Some(format_subject(id, detail));
+        self.last_subject = Some(crate::progress::exported(id, detail));
         self.render();
     }
 
     fn record_skip(&mut self, id: &str, reason: &str) {
         self.completed = (self.completed + 1).min(self.total);
         self.skipped += 1;
-        self.last_subject = Some(format_subject(id, None));
+        self.last_subject = Some(crate::progress::skipped(id));
         self.note(format!("SKIP {id}: {reason}"));
     }
 
     fn record_failure(&mut self, id: &str, error: &AppError) {
         self.completed = (self.completed + 1).min(self.total);
         self.failed += 1;
-        self.last_subject = Some(format_subject(id, None));
+        self.last_subject = Some(crate::progress::failed(id));
         self.note(format!("FAILED {id}: {error}"));
     }
 
@@ -353,9 +437,25 @@ impl BatchProgress {
             format_elapsed(self.started_at.elapsed().as_secs())
         );
         if let Some(progress) = &self.progress {
-            progress(self.completed, self.total, last);
+            progress(self.completed, self.total, &self.subject());
         }
         self.draw_status_line(&message);
+    }
+
+    /// What to say next to `current/total` in the window, in the words both
+    /// targets use.
+    ///
+    /// The run used to pass the last *finished* component here, so the bar read
+    /// `0/11: -` until the first one landed. A component being fetched is worth
+    /// naming, and so is a run that has started but finished nothing yet.
+    fn subject(&self) -> String {
+        match self.queue.get(self.completed) {
+            Some(id) => crate::progress::fetching(id),
+            None => self
+                .last_subject
+                .clone()
+                .unwrap_or_else(|| crate::progress::starting(self.total)),
+        }
     }
 
     fn active_count(&self) -> usize {
@@ -416,6 +516,7 @@ async fn export_batch_merged(
         batch_mode_label(&options),
         targets,
         &options.output,
+        ids.clone(),
         options.progress.clone(),
     );
 
@@ -601,8 +702,9 @@ async fn export_batch_merged_append(
         if let Some(record) = exported.artifacts.schlib_record {
             schlib_records.push(record);
         }
-        if let Some(library) = exported.artifacts.pcblib_library {
-            append_pcblib_library(&mut pcblib_library, pcblib_records_from_library(&library)?);
+        // The part was already reduced to its streams by the task that built it.
+        if let Some(records) = exported.artifacts.pcblib_records {
+            append_pcblib_library(&mut pcblib_library, records);
         }
     }
 
@@ -621,6 +723,45 @@ async fn export_batch_merged_append(
     Ok(summary)
 }
 
+/// Writes into a merged library that seex itself produced.
+///
+/// A library the user has marked read-only (or that a copy left read-only) cannot be
+/// overwritten as it is, and an append into it would otherwise fail with a bare
+/// "access is denied" that says nothing about which file is at fault.
+fn make_writable(path: &Path) -> Result<()> {
+    let Ok(metadata) = fs::metadata(path) else {
+        return Ok(());
+    };
+    let permissions = metadata.permissions();
+    if !permissions.readonly() {
+        return Ok(());
+    }
+    fs::set_permissions(path, writable(permissions)).map_err(|err| {
+        AppError::Other(format!(
+            "the existing library {} is read-only and cannot be updated: {err}",
+            path.display()
+        ))
+    })
+}
+
+/// The same permissions, with permission to write the file.
+///
+/// `set_readonly(false)` is only the right call on Windows. On Unix it clears
+/// every write bit at once, which leaves the library world writable, so the
+/// owner's bit is set instead and the rest of the mode is left alone.
+#[cfg(unix)]
+fn writable(permissions: fs::Permissions) -> fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+    fs::Permissions::from_mode(permissions.mode() | 0o200)
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::permissions_set_readonly_false)] // the correct call on Windows
+fn writable(mut permissions: fs::Permissions) -> fs::Permissions {
+    permissions.set_readonly(false);
+    permissions
+}
+
 fn write_merged_outputs(
     targets: ExportTargets,
     schlib_records: &[SchlibRecord],
@@ -635,6 +776,7 @@ fn write_merged_outputs(
                 "cannot write merged SchLib without any components".to_string(),
             ));
         }
+        make_writable(schlib_path)?;
         write_schlib_records(schlib_records, schlib_path)?;
         summary.generated_files.push(schlib_path.to_path_buf());
     }
@@ -644,6 +786,7 @@ fn write_merged_outputs(
                 "cannot write merged PcbLib without any components".to_string(),
             ));
         }
+        make_writable(pcblib_path)?;
         write_pcblib_records(pcblib_library, pcblib_path)?;
         summary.generated_files.push(pcblib_path.to_path_buf());
     }
@@ -667,6 +810,9 @@ async fn export_merged_components_parallel(
 
     let parallel = options.parallel.max(1).min(indexed_ids.len());
     let mut first_error = None;
+    // Fetching stays continuous: every component is prepared at the batch's own
+    // parallelism while the builds that consume them run behind it, rather than the
+    // batch being cut into waves that each have to finish before the next starts.
     let mut prepared = prepare_merged_components_parallel(
         client,
         targets,
@@ -710,6 +856,7 @@ async fn export_merged_components_parallel(
                 identity: prepared.identity,
                 component_name,
                 footprint_name,
+                step_candidates: prepared.step_candidates,
                 symbol_data: prepared.symbol_data,
                 footprint_data: prepared.footprint_data,
                 english_metadata: prepared.english_metadata,
@@ -725,6 +872,7 @@ async fn export_merged_components_parallel(
         options.schematic_stroke_color,
         options.schematic_fill_color,
         parallel,
+        options.append,
         summary,
         progress,
         &mut first_error,
@@ -826,12 +974,19 @@ async fn prepare_merged_component(
         .as_ref()
         .map(|data| resolved_footprint_name(&item, data))
         .unwrap_or_else(|| component_name_base.clone());
+    // The model ids are pulled out here, while the payload is in memory anyway, so the
+    // build can start the download before reading the payload back.
+    let step_candidates = footprint_data
+        .as_ref()
+        .map(|data| step_model_candidates(&item, data))
+        .unwrap_or_default();
+    let footprint_data = footprint_data.map(Payload::store);
 
     let symbol_data = if targets.schlib {
         let symbol_uuid = item
             .symbol_uuid()
             .ok_or(AppError::MissingSymbolOrFootprint)?;
-        Some(client.component_detail(&symbol_uuid).await?)
+        Some(Payload::store(client.component_detail(&symbol_uuid).await?))
     } else {
         None
     };
@@ -849,6 +1004,7 @@ async fn prepare_merged_component(
         identity,
         component_name_base,
         footprint_name_base,
+        step_candidates,
         symbol_data,
         footprint_data,
         english_metadata,
@@ -861,8 +1017,9 @@ async fn build_merged_components_parallel(
     named: Vec<NamedMergeComponent>,
     merged_pcblib_file: &str,
     schematic_stroke_color: [u8; 3],
-    schematic_fill_color: [u8; 3],
+    schematic_fill_color: Option<[u8; 3]>,
     parallel: usize,
+    as_records: bool,
     summary: &mut BatchSummary,
     progress: &mut BatchProgress,
     first_error: &mut Option<AppError>,
@@ -890,6 +1047,13 @@ async fn build_merged_components_parallel(
                 schematic_fill_color,
             )
             .await;
+            // An append merge only needs the streams, and reducing the part here keeps
+            // the structured library off the batch's peak.
+            let result = if as_records {
+                result.and_then(into_pcblib_records)
+            } else {
+                result
+            };
             (id, result)
         });
     }
@@ -930,26 +1094,23 @@ async fn build_named_merged_component(
     named: NamedMergeComponent,
     merged_pcblib_file: &str,
     schematic_stroke_color: [u8; 3],
-    schematic_fill_color: [u8; 3],
+    schematic_fill_color: Option<[u8; 3]>,
 ) -> Result<IndexedMergeArtifacts> {
     let schlib_record = if targets.schlib {
         let symbol_data = named
             .symbol_data
             .as_ref()
-            .ok_or(AppError::MissingSymbolOrFootprint)?;
+            .ok_or(AppError::MissingSymbolOrFootprint)?
+            .load()?;
         let component = build_schlib_component_from_detail_with_color(
             &named.item,
-            symbol_data,
+            &symbol_data,
             &named.component_name,
             Some(&named.footprint_name),
             Some(merged_pcblib_file),
             named.english_metadata.as_ref(),
-            schematic_stroke_color[0] as i32
-                | ((schematic_stroke_color[1] as i32) << 8)
-                | ((schematic_stroke_color[2] as i32) << 16),
-            schematic_fill_color[0] as i32
-                | ((schematic_fill_color[1] as i32) << 8)
-                | ((schematic_fill_color[2] as i32) << 16),
+            color_bgr(schematic_stroke_color),
+            fill_bgr(schematic_fill_color),
         )?;
         Some(schlib_record_from_component(&component)?)
     } else {
@@ -957,19 +1118,21 @@ async fn build_named_merged_component(
     };
 
     let pcblib_library = if targets.pcblib {
+        // The model download comes before the payload is read back: the payload is
+        // only needed to build the footprint, and a download takes seconds while the
+        // batch has one in flight per parallel part.
+        let step_data =
+            load_placed_step_for_pcblib(client, &named.item, &named.step_candidates).await;
         let footprint_data = named
             .footprint_data
             .as_ref()
-            .ok_or(AppError::MissingSymbolOrFootprint)?;
-        Some(
-            build_pcblib_library_from_detail(
-                client,
-                &named.item,
-                footprint_data,
-                &named.footprint_name,
-            )
-            .await?,
-        )
+            .ok_or(AppError::MissingSymbolOrFootprint)?
+            .load()?;
+        Some(build_pcblib_from_payload_with_model(
+            &footprint_data,
+            &named.footprint_name,
+            step_data,
+        )?)
     } else {
         None
     };
@@ -981,6 +1144,7 @@ async fn build_named_merged_component(
             component_name: named.component_name,
             schlib_record,
             pcblib_library,
+            pcblib_records: None,
         },
     })
 }
@@ -1170,12 +1334,8 @@ async fn export_component(
             &schlib_dir,
             options.force,
             options.english_metadata,
-            options.schematic_stroke_color[0] as i32
-                | ((options.schematic_stroke_color[1] as i32) << 8)
-                | ((options.schematic_stroke_color[2] as i32) << 16),
-            options.schematic_fill_color[0] as i32
-                | ((options.schematic_fill_color[1] as i32) << 8)
-                | ((options.schematic_fill_color[2] as i32) << 16),
+            color_bgr(options.schematic_stroke_color),
+            fill_bgr(options.schematic_fill_color),
         )
         .await?;
     }
@@ -1248,17 +1408,6 @@ fn batch_mode_label(options: &BatchOptions) -> &'static str {
     }
 }
 
-fn format_subject(id: &str, detail: Option<&str>) -> String {
-    let mut text = match detail {
-        Some(detail) if !detail.trim().is_empty() => format!("{id} {detail}"),
-        _ => id.to_string(),
-    };
-    if text.chars().count() > 52 {
-        text = format!("{}...", text.chars().take(49).collect::<String>());
-    }
-    text
-}
-
 fn format_elapsed(seconds: u64) -> String {
     let hours = seconds / 3_600;
     let minutes = (seconds % 3_600) / 60;
@@ -1273,12 +1422,39 @@ fn format_elapsed(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BatchOptions, ExportTargets, format_elapsed, format_subject, parse_lcsc_ids,
+        BatchOptions, BatchProgress, ExportTargets, format_elapsed, make_writable, parse_lcsc_ids,
         reject_existing_merged_outputs, resolve_library_name,
     };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn makes_a_read_only_library_writable_again() {
+        let path = std::env::temp_dir().join(format!(
+            "seex_readonly_{}.txt",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, b"library").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
+
+        // Whether a write is actually refused in this state depends on the
+        // user: root writes to a read-only file regardless, and the containers
+        // the distro builds run in are root. That is a property of the platform,
+        // not of seex; what seex has to do is clear the flag itself, so the flag
+        // is what is checked either side of the call.
+        make_writable(&path).unwrap();
+        assert!(!fs::metadata(&path).unwrap().permissions().readonly());
+        fs::write(&path, b"again").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"again");
+        fs::remove_file(path).ok();
+    }
 
     #[test]
     fn parse_ids_deduplicates_and_preserves_order() {
@@ -1308,7 +1484,7 @@ mod tests {
             english_metadata: false,
             force: false,
             schematic_stroke_color: [11, 56, 104],
-            schematic_fill_color: [255, 255, 224],
+            schematic_fill_color: Some([255, 255, 224]),
             progress: None,
         };
 
@@ -1344,12 +1520,57 @@ mod tests {
     }
 
     #[test]
-    fn formats_progress_subject_with_component_name() {
-        assert_eq!(format_subject("C2040", Some("RP2040")), "C2040 RP2040");
+    fn formats_elapsed_time_without_hours() {
+        assert_eq!(format_elapsed(65), "01:05");
+    }
+
+    fn progress_with(queue: Vec<&str>, parallel: usize) -> BatchProgress {
+        BatchProgress::new(
+            queue.len(),
+            parallel,
+            "test",
+            ExportTargets {
+                schlib: true,
+                pcblib: true,
+            },
+            &PathBuf::from("out"),
+            queue.iter().map(|id| id.to_string()).collect(),
+            None,
+        )
     }
 
     #[test]
-    fn formats_elapsed_time_without_hours() {
-        assert_eq!(format_elapsed(65), "01:05");
+    fn the_bar_names_the_component_being_fetched() {
+        let mut progress = progress_with(vec!["C1", "C2", "C3"], 2);
+
+        // This used to read `0/3: -`: the subject only ever held a finished
+        // component, so the bar said nothing until the first one landed.
+        assert_eq!(progress.subject(), "Fetching C1");
+
+        progress.completed = 1;
+        assert_eq!(progress.subject(), "Fetching C2");
+
+        progress.completed = 2;
+        assert_eq!(progress.subject(), "Fetching C3");
+
+        // With nothing left in flight, the last component is the useful line,
+        // in the words the KiCad batch uses for the same step.
+        progress.completed = 3;
+        progress.record_success("C3", Some("RP2040"));
+        assert_eq!(progress.subject(), "Exported C3 RP2040");
+    }
+
+    #[test]
+    fn a_lone_component_is_named_without_a_count() {
+        let progress = progress_with(vec!["C1"], 1);
+
+        assert_eq!(progress.subject(), "Fetching C1");
+    }
+
+    #[test]
+    fn a_run_with_nothing_to_do_says_so() {
+        let progress = progress_with(Vec::new(), 1);
+
+        assert_eq!(progress.subject(), "Starting 0 components");
     }
 }

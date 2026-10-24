@@ -1,4 +1,4 @@
-flags = ["-Z, embedmetadata=no"]
+flags = ["-Z", "embed-metadata=no"]
 
 
 [alias]

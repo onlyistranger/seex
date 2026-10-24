@@ -3,6 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
@@ -22,6 +23,11 @@ use crate::lcsc::LcscClient;
 use crate::metadata::ResolvedMetadata;
 use crate::monitor::ExportProgressCallback;
 
+/// How long one component may take before the batch gives up on it. It covers
+/// the fetch, both conversions and the model download, so it is generous; it is
+/// the difference between one slow part and a batch that never ends.
+const COMPONENT_TIMEOUT: Duration = Duration::from_secs(180);
+
 #[derive(Debug, Clone)]
 pub struct KicadSingleOptions {
     pub lcsc_id: String,
@@ -38,6 +44,10 @@ pub struct KicadBatchOptions {
     pub english_metadata: bool,
     pub parallel: usize,
     pub continue_on_error: bool,
+    /// Add to the library that is already in the output directory. Without it
+    /// the export owns the library and refuses to write into one that is
+    /// there, which is what Altium's append flag means as well.
+    pub append: bool,
     pub progress: Option<ExportProgressCallback>,
 }
 
@@ -130,6 +140,9 @@ pub async fn export_kicad_single(options: KicadSingleOptions) -> Result<KicadBat
         english_metadata: options.english_metadata,
         parallel: 1,
         continue_on_error: false,
+        // One component named one library: it is written into whatever is
+        // there, which is how the CLI's --symbol-lib/--footprint-lib work.
+        append: true,
         progress: None,
     };
     export_kicad_batch(batch_options).await
@@ -141,25 +154,23 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
     let api = Arc::new(EasyedaApi::new());
     let lcsc_client = options.english_metadata.then(LcscClient::new).map(Arc::new);
     let manager = Arc::new(LibraryManager::from_options(&options.library)?);
+    reject_existing_library(&options, &manager)?;
     manager.create_directories()?;
 
     let model_status = Arc::new(ModelStageStatus::new());
     let export_options = Arc::new(options.export.clone());
-    let checkpoint_path = kicad_checkpoint_path(&options.library.output, &options.export);
-    let completed = if options.export.force {
-        HashSet::new()
-    } else {
+    let checkpoint_path =
+        kicad_checkpoint_path(manager.lib_name(), &options.library.output, &options.export);
+    // The checkpoint is the record of what has already been exported into this
+    // library, so it decides what to skip on its own. `force` says to replace
+    // entries that are there, which is a different job: reading it as "do the
+    // work again" is what made a repeat export re-download everything.
+    let completed = if library_present(&options, &manager) {
         load_checkpoint(&checkpoint_path)?
+    } else {
+        HashSet::new()
     };
-    let mut ids = Vec::new();
-    let mut skipped = 0usize;
-    for id in options.ids.clone() {
-        if completed.contains(&normalize_checkpoint_id(&id)) {
-            skipped += 1;
-        } else {
-            ids.push(id);
-        }
-    }
+    let (ids, skipped) = pending_ids(options.ids.clone(), &completed);
     let mut summary = KicadBatchSummary {
         total: ids.len() + skipped,
         skipped,
@@ -175,7 +186,13 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
     };
 
     if let Some(progress) = &options.progress {
-        progress(skipped, summary.total, "Preparing KiCad export");
+        // The words come from `crate::progress`, the same ones the Altium batch
+        // uses: the two targets report a run the same way.
+        progress(
+            skipped,
+            summary.total,
+            &crate::progress::starting(ids.len()),
+        );
     }
 
     if ids.is_empty() {
@@ -184,6 +201,7 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
 
     let parallel = options.parallel.max(1).min(ids.len().max(1));
     let semaphore = Arc::new(Semaphore::new(parallel));
+    let done = Arc::new(AtomicUsize::new(skipped));
     let mut join_set = JoinSet::new();
 
     for id in ids {
@@ -193,20 +211,46 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
         let model_status = model_status.clone();
         let export_options = export_options.clone();
         let semaphore = semaphore.clone();
+        let progress = options.progress.clone();
+        let done = Arc::clone(&done);
+        let total = summary.total;
         join_set.spawn(async move {
             let _permit = semaphore
                 .acquire_owned()
                 .await
                 .expect("KiCad batch semaphore should remain open");
-            let result = export_one_kicad_component(
-                &api,
-                lcsc_client.as_deref(),
-                &manager,
-                &export_options,
-                &model_status,
-                &id,
+            // Say which part is being fetched before it is fetched: a batch that
+            // is waiting on a slow or blocked upstream otherwise sits on the
+            // same line for minutes and reads as a hang.
+            if let Some(progress) = &progress {
+                progress(
+                    done.load(Ordering::Relaxed),
+                    total,
+                    &crate::progress::fetching(&id),
+                );
+            }
+            let result = match tokio::time::timeout(
+                COMPONENT_TIMEOUT,
+                export_one_kicad_component(
+                    &api,
+                    lcsc_client.as_deref(),
+                    &manager,
+                    &export_options,
+                    &model_status,
+                    &id,
+                ),
             )
-            .await;
+            .await
+            {
+                Ok(result) => result,
+                // One stuck part must not hold the whole batch: it fails, and
+                // the run carries on with the rest.
+                Err(_) => Err(AppError::Other(format!(
+                    "{id}: gave up after {}s",
+                    COMPONENT_TIMEOUT.as_secs()
+                ))),
+            };
+            done.fetch_add(1, Ordering::Relaxed);
             (id, result)
         });
     }
@@ -224,7 +268,7 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
                     progress(
                         summary.success + summary.failed + summary.skipped,
                         summary.total,
-                        &format!("Exported {id}"),
+                        &crate::progress::exported(&id, Some(&exported.component_name)),
                     );
                 }
             }
@@ -239,7 +283,7 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
                     progress(
                         summary.success + summary.failed + summary.skipped,
                         summary.total,
-                        &format!("Failed {id}"),
+                        &crate::progress::failed(&id),
                     );
                 }
             }
@@ -253,19 +297,41 @@ pub async fn export_kicad_batch(options: KicadBatchOptions) -> Result<KicadBatch
         }
     }
 
+    // A batch that stops early still has to name every component it gave up on:
+    // the first error alone would leave the failed-ids panel showing one id of
+    // many.
+    let stopped_with = |summary: &KicadBatchSummary, first_error: Option<AppError>| {
+        let reason = first_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "KiCad export failed".to_string());
+        if summary.failed_ids.is_empty() {
+            AppError::Other(reason)
+        } else {
+            AppError::Other(format!(
+                "{reason}. Failed IDs: {}",
+                summary.failed_ids.join(", ")
+            ))
+        }
+    };
+
     if summary.failed > 0 && !options.continue_on_error {
-        return Err(first_error.unwrap_or_else(|| AppError::Other("KiCad export failed".into())));
+        return Err(stopped_with(&summary, first_error));
     }
     if summary.success == 0 && summary.skipped == 0 {
-        return Err(first_error.unwrap_or_else(|| {
-            AppError::Other("no KiCad components exported successfully".to_string())
-        }));
+        return Err(stopped_with(&summary, first_error));
     }
 
     Ok(summary)
 }
 
-fn kicad_checkpoint_path(output: &Path, options: &KicadExportOptions) -> PathBuf {
+/// The checkpoint file for one library and one set of targets. The library is
+/// part of the name because two libraries written into one directory are two
+/// different sets of exported ids.
+fn kicad_checkpoint_path(
+    library_name: &str,
+    output: &Path,
+    options: &KicadExportOptions,
+) -> PathBuf {
     let mut key = Vec::new();
     if options.full || options.symbol {
         key.push("symbol");
@@ -276,7 +342,42 @@ fn kicad_checkpoint_path(output: &Path, options: &KicadExportOptions) -> PathBuf
     if options.full || options.model_3d {
         key.push("3d");
     }
-    output.join(format!(".kicad_checkpoint_{}", key.join("_")))
+    output.join(format!(
+        ".kicad_checkpoint_{library_name}_{}",
+        key.join("_")
+    ))
+}
+
+/// Whether the outputs the checkpoint would be talking about are still on disk.
+///
+/// A checkpoint means "these ids are in this library", so it only counts while
+/// the library is there: deleting it is how a user asks for everything to be
+/// exported again. An absent 3D model directory does not count, because a part
+/// without a model is ordinary and must not stop the rest from being skipped.
+fn library_present(options: &KicadBatchOptions, manager: &LibraryManager) -> bool {
+    let full = options.export.full;
+    if options.export.model_3d && !full {
+        // A 3D-only export is judged by its models: it writes nothing else.
+        return holds_extension(manager.model_lib_dir(), "step");
+    }
+    let symbols = (options.export.symbol || full) && manager.get_symbol_lib_path().exists();
+    let footprints = (options.export.footprint || full)
+        && holds_extension(manager.footprint_lib_dir(), "kicad_mod");
+    symbols || footprints
+}
+
+/// The ids still to export, and how many the checkpoint already covers.
+fn pending_ids(ids: Vec<String>, completed: &HashSet<String>) -> (Vec<String>, usize) {
+    let mut pending = Vec::new();
+    let mut skipped = 0usize;
+    for id in ids {
+        if completed.contains(&normalize_checkpoint_id(&id)) {
+            skipped += 1;
+        } else {
+            pending.push(id);
+        }
+    }
+    (pending, skipped)
 }
 
 fn load_checkpoint(path: &Path) -> Result<HashSet<String>> {
@@ -407,6 +508,62 @@ fn validate_batch_options(options: &KicadBatchOptions) -> Result<()> {
     }
     validate_targets(&options.export)?;
     validate_library_options(&options.library)
+}
+
+/// Refuses to write into a library that is already there unless the caller
+/// asked to append — the same rule, and the same reason, as the Altium export
+/// refusing an existing merged library.
+///
+/// The writers themselves add what is missing to an existing library and leave
+/// the rest alone, which *is* the append behaviour, so without this check the
+/// flag would mean nothing on this path: exporting into a directory that
+/// already holds a library would quietly merge the two.
+fn reject_existing_library(options: &KicadBatchOptions, manager: &LibraryManager) -> Result<()> {
+    if options.append {
+        return Ok(());
+    }
+
+    let full = options.export.full;
+    let mut existing = Vec::new();
+    if options.export.symbol || full {
+        let path = manager.get_symbol_lib_path();
+        if path.exists() {
+            existing.push(path.display().to_string());
+        }
+    }
+    if options.export.footprint || full {
+        let dir = manager.footprint_lib_dir();
+        if holds_extension(dir, "kicad_mod") {
+            existing.push(dir.display().to_string());
+        }
+    }
+    if options.export.model_3d || full {
+        let dir = manager.model_lib_dir();
+        if holds_extension(dir, "step") {
+            existing.push(dir.display().to_string());
+        }
+    }
+
+    if existing.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Other(format!(
+        "KiCad library already exists: {}. Turn on Append to add components to it, or choose another library name.",
+        existing.join(", ")
+    )))
+}
+
+/// Whether a directory holds at least one file with this extension, which is
+/// what makes it an existing library rather than an empty directory the export
+/// may as well fill.
+fn holds_extension(dir: &Path, extension: &str) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                entry.path().extension().and_then(|value| value.to_str()) == Some(extension)
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn validate_targets(options: &KicadExportOptions) -> Result<()> {
@@ -546,6 +703,171 @@ mod tests {
     }
 
     #[test]
+    fn the_checkpoint_covers_an_id_whether_or_not_force_is_on() {
+        // `pending_ids` has no force argument on purpose: the checkpoint is the
+        // record of what has been exported, and force only says to replace what
+        // is there. Passing force in was what made a repeat export redo all of
+        // it.
+        let completed: HashSet<String> = ["C2040".to_string()].into_iter().collect();
+
+        let (pending, skipped) =
+            pending_ids(vec!["c2040".to_string(), "C42".to_string()], &completed);
+
+        assert_eq!(
+            skipped, 1,
+            "the exported id is skipped, whatever force says"
+        );
+        assert_eq!(pending, vec!["C42".to_string()]);
+    }
+
+    #[test]
+    fn the_checkpoint_is_named_for_its_library() {
+        let export = KicadExportOptions {
+            symbol: false,
+            footprint: false,
+            model_3d: false,
+            full: true,
+            force: false,
+            kicad_version: KicadVersion::V6,
+            ..Default::default()
+        };
+
+        let path = kicad_checkpoint_path("lib", Path::new("out"), &export)
+            .to_string_lossy()
+            .to_string();
+
+        assert!(path.contains("lib"), "{path}");
+        assert!(path.contains("symbol_footprint_3d"), "{path}");
+    }
+
+    #[test]
+    fn a_checkpoint_only_counts_while_its_library_is_there() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output = std::env::temp_dir().join(format!("seex_kicad_present_{stamp}"));
+        let manager = LibraryManager::from_options(&KicadLibraryOptions {
+            output: output.clone(),
+            library_name: Some("lib".to_string()),
+            symbol_lib: None,
+            footprint_lib: None,
+            model_lib: None,
+            doc_lib: None,
+        })
+        .unwrap();
+        let options = KicadBatchOptions {
+            ids: vec!["C2040".to_string()],
+            library: KicadLibraryOptions {
+                output: output.clone(),
+                library_name: Some("lib".to_string()),
+                symbol_lib: None,
+                footprint_lib: None,
+                model_lib: None,
+                doc_lib: None,
+            },
+            export: KicadExportOptions {
+                symbol: true,
+                footprint: true,
+                model_3d: false,
+                full: false,
+                force: false,
+                kicad_version: KicadVersion::V6,
+                ..Default::default()
+            },
+            english_metadata: false,
+            parallel: 1,
+            continue_on_error: false,
+            append: true,
+            progress: None,
+        };
+
+        assert!(
+            !library_present(&options, &manager),
+            "nothing is written yet"
+        );
+
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(manager.get_symbol_lib_path(), "(kicad_symbol_lib)").unwrap();
+        assert!(
+            library_present(&options, &manager),
+            "the library is there now"
+        );
+
+        std::fs::remove_file(manager.get_symbol_lib_path()).unwrap();
+        assert!(
+            !library_present(&options, &manager),
+            "deleting the library is how the user asks for it all again"
+        );
+
+        let _ = std::fs::remove_dir_all(&output);
+    }
+
+    #[test]
+    fn an_existing_library_is_only_written_into_when_appending() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output = std::env::temp_dir().join(format!("seex_kicad_append_{stamp}"));
+        let library = KicadLibraryOptions {
+            output: output.clone(),
+            library_name: Some("lib".to_string()),
+            symbol_lib: None,
+            footprint_lib: None,
+            model_lib: None,
+            doc_lib: None,
+        };
+        let manager = LibraryManager::from_options(&library).unwrap();
+        let options = |append: bool| KicadBatchOptions {
+            ids: vec!["C2040".to_string()],
+            library: KicadLibraryOptions {
+                output: output.clone(),
+                library_name: Some("lib".to_string()),
+                symbol_lib: None,
+                footprint_lib: None,
+                model_lib: None,
+                doc_lib: None,
+            },
+            export: KicadExportOptions {
+                symbol: true,
+                footprint: true,
+                model_3d: false,
+                full: false,
+                force: false,
+                kicad_version: KicadVersion::V6,
+                ..Default::default()
+            },
+            english_metadata: false,
+            parallel: 1,
+            continue_on_error: false,
+            append,
+            progress: None,
+        };
+
+        // Nothing there yet: both modes may write.
+        reject_existing_library(&options(false), &manager).unwrap();
+
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(manager.get_symbol_lib_path(), "(kicad_symbol_lib)").unwrap();
+        std::fs::create_dir_all(manager.footprint_lib_dir()).unwrap();
+        std::fs::write(
+            manager.footprint_lib_dir().join("Part_C1.kicad_mod"),
+            "(footprint \"Part_C1\")",
+        )
+        .unwrap();
+
+        let refused = reject_existing_library(&options(false), &manager)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("already exists"), "{refused}");
+        assert!(refused.contains("Append"), "{refused}");
+        reject_existing_library(&options(true), &manager).unwrap();
+
+        let _ = std::fs::remove_dir_all(&output);
+    }
+
+    #[test]
     fn requested_metadata_keeps_base_component_fields_without_product() {
         let mut component_data = ComponentData {
             lcsc_id: "C123".to_string(),
@@ -601,6 +923,7 @@ mod tests {
             english_metadata: false,
             parallel: 1,
             continue_on_error: false,
+            append: false,
             progress: None,
         };
 
@@ -659,6 +982,7 @@ mod tests {
             english_metadata: false,
             parallel: 1,
             continue_on_error: false,
+            append: false,
             progress: None,
         };
 
@@ -699,6 +1023,7 @@ mod tests {
             english_metadata: false,
             parallel: 1,
             continue_on_error: false,
+            append: false,
             progress: None,
         };
 

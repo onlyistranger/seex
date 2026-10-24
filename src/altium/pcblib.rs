@@ -1,7 +1,9 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use encoding_rs::WINDOWS_1252;
 
@@ -51,7 +53,7 @@ impl CoordPoint {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PcbLibrary {
     pub unique_id: String,
     pub components: Vec<PcbComponent>,
@@ -89,7 +91,217 @@ impl PcbComponent {
     }
 }
 
-#[derive(Debug, Clone)]
+/// A model's STEP data, kept out of memory until the library is written.
+///
+/// The models are the bulk of a merged library (213MB across 200 parts in one
+/// measurement), and the library is assembled in memory before it is written, so
+/// holding every model's bytes made a batch's peak follow the number of parts
+/// rather than the few being worked on at once. Each model is spilled to a
+/// scratch file as it arrives and read back, one at a time, as the library is
+/// written.
+#[derive(Debug)]
+pub enum ModelData {
+    /// Bytes already in hand, for a caller with no reason to spill them.
+    Bytes(Vec<u8>),
+    /// A scratch file this process wrote, removed as soon as it is read.
+    Scratch(PathBuf),
+}
+
+/// A path in the temp directory for one model's bytes. Downloads write straight
+/// into a file like this so a model is not held in memory while it arrives.
+pub(crate) fn scratch_step_path() -> PathBuf {
+    scratch_path("step", "step")
+}
+
+/// A path in the temp directory for one fetched component payload.
+pub(crate) fn scratch_payload_path() -> PathBuf {
+    scratch_path("payload", "json")
+}
+
+fn scratch_path(kind: &str, extension: &str) -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    std::env::temp_dir().join(format!(
+        "seex_{kind}_{}_{}.{extension}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+impl Drop for ModelData {
+    /// A run that fails before the library is written would otherwise leave a
+    /// batch's worth of models behind in the temp directory.
+    fn drop(&mut self) {
+        if let ModelData::Scratch(path) = self {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+impl ModelData {
+    /// Puts `bytes` in a scratch file. A file that cannot be written is no reason
+    /// to lose the model, so the bytes simply stay in memory instead.
+    pub fn spill(bytes: Vec<u8>) -> Self {
+        let path = scratch_step_path();
+        match fs::write(&path, &bytes) {
+            Ok(()) => ModelData::Scratch(path),
+            Err(_) => ModelData::Bytes(bytes),
+        }
+    }
+
+    /// Puts a borrowed model in a scratch file, which is the common case: the
+    /// caller has no reason to hand over a model-sized buffer it would only write
+    /// to disk. Only a scratch file that cannot be written costs a copy.
+    pub fn spill_copy(bytes: &[u8]) -> Self {
+        let path = scratch_step_path();
+        match fs::write(&path, bytes) {
+            Ok(()) => ModelData::Scratch(path),
+            Err(_) => ModelData::Bytes(bytes.to_vec()),
+        }
+    }
+
+    /// Copies a model out of a reader into a scratch file, so reading a model back
+    /// out of a library does not hold it in memory first.
+    pub fn from_reader(reader: &mut impl Read) -> Result<Self> {
+        let path = scratch_step_path();
+        let Ok(file) = File::create(&path) else {
+            // A scratch file that cannot be created only costs the copy.
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes)?;
+            return Ok(ModelData::Bytes(bytes));
+        };
+
+        match std::io::copy(reader, &mut BufWriter::new(file)) {
+            Ok(_) => Ok(ModelData::Scratch(path)),
+            Err(error) => {
+                let _ = fs::remove_file(&path);
+                Err(error.into())
+            }
+        }
+    }
+
+    /// The bytes to write into the library. A scratch file is read once and then
+    /// removed: leaving it behind would fill the temp directory with a batch's
+    /// worth of models.
+    pub fn read(&self) -> Result<Cow<'_, [u8]>> {
+        match self {
+            ModelData::Bytes(bytes) => Ok(Cow::Borrowed(bytes)),
+            ModelData::Scratch(path) => {
+                let bytes = fs::read(path)?;
+                let _ = fs::remove_file(path);
+                Ok(Cow::Owned(bytes))
+            }
+        }
+    }
+
+    /// Copies the model into `writer` a chunk at a time.
+    ///
+    /// A merge has one model per parallel part in flight, and it writes each part's
+    /// library out before merging, so reading a whole model into memory to write it
+    /// is another model-sized buffer per part.
+    pub fn copy_to(&self, writer: &mut impl Write) -> std::io::Result<()> {
+        self.stream_into(|chunk| writer.write_all(chunk))
+    }
+
+    /// Writes the model as the zlib "stored" stream the library expects, a chunk at
+    /// a time, without building the wrapped model in memory first.
+    pub fn write_zlib_stored(&self, writer: &mut impl Write) -> std::io::Result<()> {
+        writer.write_all(&[0x78, 0x01])?;
+        let mut block = Vec::with_capacity(STORED_BLOCK_LEN);
+        let mut checksum = Adler32::default();
+        let mut blocks_written = 0usize;
+        self.stream_into(|chunk| {
+            checksum.update(chunk);
+            let mut offset = 0usize;
+            while offset < chunk.len() {
+                if block.len() == STORED_BLOCK_LEN && offset < chunk.len() {
+                    write_stored_block(writer, &block, false)?;
+                    block.clear();
+                    blocks_written += 1;
+                }
+                let take = (STORED_BLOCK_LEN - block.len()).min(chunk.len() - offset);
+                block.extend_from_slice(&chunk[offset..offset + take]);
+                offset += take;
+            }
+            Ok(())
+        })?;
+
+        // The last block is marked final, which cannot be known until the model ends.
+        if block.is_empty() && blocks_written == 0 {
+            write_stored_block(writer, &[], true)?;
+        } else {
+            write_stored_block(writer, &block, true)?;
+        }
+        writer.write_all(&checksum.finish().to_be_bytes())
+    }
+
+    /// Feeds the model to `sink` in chunks, and removes a scratch file once it has
+    /// been handed over.
+    fn stream_into(
+        &self,
+        mut sink: impl FnMut(&[u8]) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        match self {
+            ModelData::Bytes(bytes) => sink(bytes),
+            ModelData::Scratch(path) => {
+                let mut file = BufReader::new(File::open(path)?);
+                let mut buffer = vec![0u8; COPY_CHUNK_LEN];
+                loop {
+                    let read = file.read(&mut buffer)?;
+                    if read == 0 {
+                        break;
+                    }
+                    sink(&buffer[..read])?;
+                }
+                drop(file);
+                let _ = fs::remove_file(path);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The largest payload a deflate stored block can carry.
+const STORED_BLOCK_LEN: usize = 65_535;
+const COPY_CHUNK_LEN: usize = 64 * 1024;
+
+fn write_stored_block(
+    writer: &mut impl Write,
+    data: &[u8],
+    final_block: bool,
+) -> std::io::Result<()> {
+    writer.write_all(&[if final_block { 0x01 } else { 0x00 }])?;
+    let len = data.len() as u16;
+    writer.write_all(&len.to_le_bytes())?;
+    writer.write_all(&(!len).to_le_bytes())?;
+    writer.write_all(data)
+}
+
+#[derive(Default)]
+struct Adler32 {
+    a: u32,
+    b: u32,
+}
+
+impl Adler32 {
+    fn update(&mut self, data: &[u8]) {
+        const MOD_ADLER: u32 = 65_521;
+        let mut a = if self.a == 0 { 1 } else { self.a };
+        let mut b = self.b;
+        for &byte in data {
+            a = (a + u32::from(byte)) % MOD_ADLER;
+            b = (b + a) % MOD_ADLER;
+        }
+        self.a = a;
+        self.b = b;
+    }
+
+    fn finish(self) -> u32 {
+        let a = if self.a == 0 { 1 } else { self.a };
+        (self.b << 16) | a
+    }
+}
+
+#[derive(Debug)]
 pub struct PcbModel {
     pub id: String,
     pub name: String,
@@ -100,7 +312,7 @@ pub struct PcbModel {
     pub rotation_z: f64,
     pub dz_raw: i32,
     pub checksum: i32,
-    pub step_data: Vec<u8>,
+    pub step_data: ModelData,
 }
 
 #[derive(Debug, Clone)]
@@ -259,11 +471,11 @@ pub fn write_pcblib(library: &PcbLibrary, output_path: &Path) -> Result<()> {
         &models_data_bytes(library),
     )?;
     for (index, model) in library.models.iter().enumerate() {
-        write_stream(
-            &mut compound,
-            &format!("/Library/Models/{index}"),
-            &zlib_store(&model.step_data),
-        )?;
+        // Written straight from its scratch file: a merge holds one model per
+        // parallel part, so wrapping each one in memory is a model-sized buffer each.
+        let path = format!("/Library/Models/{index}");
+        let mut stream = compound.create_stream(&path)?;
+        model.step_data.write_zlib_stored(&mut stream)?;
     }
 
     compound.create_storage("/Library/Textures/")?;
@@ -1097,6 +1309,57 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn writes_model_rotation_into_the_component_body() {
+        let body = PcbComponentBody {
+            layer_name: "MECHANICAL1".to_string(),
+            name: "__LCEDA_BODY__".to_string(),
+            kind: 0,
+            subpoly_index: -1,
+            union_index: 0,
+            arc_resolution_raw: 5_000,
+            is_shape_based: false,
+            cavity_height_raw: 0,
+            standoff_height_raw: 0,
+            overall_height_raw: 100_000,
+            body_color_3d: 0x808080,
+            body_opacity_3d: 1.0,
+            body_projection: 0,
+            model_id: "{00000000-0000-0000-0000-000000000000}".to_string(),
+            model_embed: true,
+            model_2d_location: CoordPoint::new(0, 0),
+            model_2d_rotation: 0.0,
+            model_3d_rot_x: 0.0,
+            model_3d_rot_y: 0.0,
+            model_3d_rot_z: 270.0,
+            model_3d_dz_raw: 0,
+            model_checksum: 0,
+            model_name: "BODY.step".to_string(),
+            model_type: 1,
+            model_source: "Undefined".to_string(),
+            identifier: None,
+            texture: String::new(),
+            outline: vec![
+                CoordPoint::new(0, 0),
+                CoordPoint::new(10_000, 0),
+                CoordPoint::new(10_000, 10_000),
+            ],
+            is_locked: false,
+            is_tenting_top: false,
+            is_tenting_bottom: false,
+            is_keepout: false,
+        };
+
+        let mut writer = BinaryWriter::default();
+        write_component_body(&mut writer, &body);
+        let text = String::from_utf8_lossy(&writer.into_inner()).to_string();
+
+        assert!(
+            text.contains("MODEL.3D.ROTZ=270"),
+            "model rotation missing from body parameters: {text}"
+        );
+    }
+
+    #[test]
     fn writes_pcblib_compound_streams() {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1262,6 +1525,53 @@ mod tests {
         }
         assert_eq!(offset, bytes.len());
         last_payload
+    }
+
+    fn temp_file(label: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{label}_{timestamp}.PcbLib"))
+    }
+
+    #[test]
+    fn writes_a_spilled_model_stream_byte_for_byte() {
+        // Long enough to need more than one deflate stored block, so the block
+        // boundaries are checked as well.
+        let mut payload = b"ISO-10303-21;\n".to_vec();
+        while payload.len() < STORED_BLOCK_LEN * 2 + 17 {
+            payload.extend_from_slice(b"#1 = CARTESIAN_POINT ( 'NONE', ( 0., 0., 0. ) );\n");
+        }
+        payload.extend_from_slice(b"END-ISO-10303-21;\n");
+        let model = PcbModel {
+            id: "{00000000-0000-0000-0000-000000000001}".to_string(),
+            name: "BODY".to_string(),
+            is_embedded: true,
+            model_source: "Undefined".to_string(),
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            rotation_z: 0.0,
+            dz_raw: 0,
+            checksum: 0,
+            step_data: ModelData::spill(payload.clone()),
+        };
+        let library = PcbLibrary {
+            unique_id: stable_alpha_id("TEST_MODEL", "library"),
+            components: vec![],
+            models: vec![model],
+        };
+        let path = temp_file("export_pcblib_model");
+        write_pcblib(&library, &path).unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut compound = cfb::CompoundFile::open(file).unwrap();
+        let mut stream = compound.open_stream("/Library/Models/0").unwrap();
+        let mut written = Vec::new();
+        std::io::Read::read_to_end(&mut stream, &mut written).unwrap();
+        fs::remove_file(path).ok();
+
+        assert_eq!(written, zlib_store(&payload));
     }
 
     #[test]
