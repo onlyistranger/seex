@@ -94,12 +94,37 @@
 ### 导出示例
 
 <table>
-  <summary>KiCad示例</summary>
-  <tr>
-    <td align="center"><img src="imgs/showcase/kicad/kicad_symbol.png" alt="KiCad 符号" width="280" /><br /><sub>符号库</sub></td>
-    <td align="center"><img src="imgs/showcase/kicad/kicad_footprint.png" alt="KiCad 封装" width="280" /><br /><sub>封装库</sub></td>
-    <td align="center"><img src="imgs/showcase/kicad/kicad_3dmodel.png" alt="KiCad 3D 模型" width="280" /><br /><sub>3D 模型</sub></td>
-  </tr>
+  <summary>KiCad 符号与封装示例</summary>
+
+  <table>
+    <tr>
+      <td><img src="imgs/showcase/kicad/sch_pcb/sch_pcb_1.png" alt="KiCad 符号与封装示例 1" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/sch_pcb/sch_pcb_2.png" alt="KiCad 符号与封装示例 2" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/sch_pcb/sch_pcb_3.png" alt="KiCad 符号与封装示例 3" width="420" /></td>
+    </tr>
+    <tr>
+      <td><img src="imgs/showcase/kicad/sch_pcb/sch_pcb_4.png" alt="KiCad 符号与封装示例 4" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/sch_pcb/sch_pcb_5.png" alt="KiCad 符号与封装示例 5" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/sch_pcb/sch_pcb_6.png" alt="KiCad 符号与封装示例 6" width="420" /></td>
+    </tr>
+  </table>
+</table>
+
+<table>
+  <summary>KiCad 3D 模型示例</summary>
+
+  <table>
+    <tr>
+      <td><img src="imgs/showcase/kicad/3d_models/SOT-89-3.png" alt="SOT-89-3" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/3d_models/TSSOP-20.png" alt="TSSOP-20" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/3d_models/QFN-80.png" alt="QFN-80" width="420" /></td>
+    </tr>
+    <tr>
+      <td><img src="imgs/showcase/kicad/3d_models/SOIC-8.png" alt="SOIC-8" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/3d_models/SOIC-14.png" alt="SOIC-14" width="420" /></td>
+      <td><img src="imgs/showcase/kicad/3d_models/LQFP-48.png" alt="LQFP-48" width="420" /></td>
+    </tr>
+  </table>
 </table>
 
 <table>
