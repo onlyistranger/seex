@@ -341,8 +341,6 @@ pub fn run() {
         if let Err(error) = opened {
             eprintln!("SeEx: could not open its window: {error}");
         } else {
-            // egui opened always-on-top; keep that as the starting state.
-            set_always_on_top(true);
             round_window_corners();
         }
 
@@ -453,7 +451,7 @@ impl SeexUi {
             donation_code,
             donation_aspect,
             page: Page::Monitor,
-            pin_on_top: true,
+            pin_on_top: false,
             show_matched: true,
             show_history: true,
             match_quick: true,
@@ -736,7 +734,9 @@ impl SeexUi {
     /// The repaint work the egui `update` did on a timer: follow the system
     /// theme, collect file-dialog answers, flush config writes, expire notices.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        self.poll_file_dialog();
+        if self.poll_file_dialog() {
+            cx.notify();
+        }
         self.process_config_save();
         self.sync_system_theme(cx);
         self.check_for_updates_when_due();
@@ -863,7 +863,12 @@ impl SeexUi {
         });
     }
 
-    fn poll_file_dialog(&mut self) {
+    /// Applies any answer the file dialog has produced.
+    ///
+    /// Returns whether one was applied, so the caller can repaint: the text
+    /// boxes are built once and keep their own text, so without a repaint the
+    /// folder that was just picked would not appear until the next launch.
+    fn poll_file_dialog(&mut self) -> bool {
         if let Some(start_time) = self.file_dialog_start_time {
             if start_time.elapsed() > Duration::from_secs(30) {
                 self.file_dialog_running = false;
@@ -872,20 +877,30 @@ impl SeexUi {
             }
         }
 
+        let mut applied = false;
         while let Ok(result) = self.file_dialog_rx.try_recv() {
             self.file_dialog_running = false;
             self.file_dialog_start_time = None;
             if let Some(path) = result.path {
+                let path = crate::monitor::normalize_path_string(&path.to_string_lossy());
+                let slot = match result.kind {
+                    FileDialogKind::SaveCsv => InputSlot::MatchedPath,
+                    FileDialogKind::PickFolder => InputSlot::ExportPath,
+                };
                 if let Ok(mut state) = self.state.lock() {
-                    let path = crate::monitor::normalize_path_string(&path.to_string_lossy());
                     match result.kind {
                         FileDialogKind::SaveCsv => state.set_matched_save_path(path),
                         FileDialogKind::PickFolder => state.set_export_output_path(path),
                     }
                 }
+                // Drop the cached box so the next frame seeds it from the value
+                // that was just set, instead of showing the previous folder.
+                self.inputs.remove(&slot);
+                applied = true;
                 self.mark_config_dirty();
             }
         }
+        applied
     }
 
     pub fn show_toast_success(&mut self, message: impl Into<String>) {
