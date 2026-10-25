@@ -48,6 +48,12 @@
 - All targets support exporting `3D` models on their own.
 - The LCEDA logo (watermark) is removed from `3D` models by default and the model rebuilt; when it cannot be removed safely the original model is kept, and those components are listed in the export result.
 
+## 🔄 Workflow
+
+<div align="center">
+  <img src="imgs/workflow.png" alt="npnp/seex workflow: LCSC part numbers → seex / npnp → KiCad, Altium, Cadence" width="900"/>
+</div>
+
 ## 📸 Screenshots
 
 <table>

@@ -48,6 +48,12 @@
 - 均支持单独导出 `3D` 模型。
 - 默认去除 `3D` 模型上的立创EDA标志（水印），重建模型；无法安全去除时保留原模型，并在导出结果中列出这些元件。
 
+## 🔄 工作流
+
+<div align="center">
+  <img src="imgs/workflow.png" alt="npnp/seex 工作流：立创商城编号 → seex / npnp → KiCad、Altium、Cadence" width="900"/>
+</div>
+
 ## 📸 界面预览
 
 <table>
