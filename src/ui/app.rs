@@ -39,6 +39,7 @@ pub enum Page {
     Monitor,
     History,
     Export,
+    StepClean,
     More,
     Font,
 }
@@ -53,6 +54,8 @@ pub enum InputSlot {
     StrokeHex,
     FillHex,
     FontSearch,
+    StepCleanInput,
+    StepCleanOutput,
 }
 
 pub enum ManualImportStatus {
@@ -114,6 +117,15 @@ pub struct GitHubRelease {
 pub enum FileDialogKind {
     SaveCsv,
     PickFolder,
+    PickStepInputFile,
+    PickStepInputFolder,
+    PickStepOutputFolder,
+}
+
+pub enum StepCleanProgressMsg {
+    Progress { current: usize, total: usize, log: String },
+    Finished(crate::step_cleaner::CleanStepSummary),
+    Error(String),
 }
 
 pub struct FileDialogResult {
@@ -209,6 +221,13 @@ pub struct SeexUi {
     pub font_names: Vec<String>,
     /// The face used for timestamps and other monospaced text.
     pub mono_family: SharedString,
+    pub step_clean_input: String,
+    pub step_clean_output: String,
+    pub step_clean_running: bool,
+    pub step_clean_progress: (usize, usize),
+    pub step_clean_logs: Vec<String>,
+    pub step_clean_summary: Option<crate::step_cleaner::CleanStepSummary>,
+    pub step_clean_rx: Option<Receiver<StepCleanProgressMsg>>,
 }
 
 pub fn app_title() -> String {
@@ -495,6 +514,13 @@ impl SeexUi {
             font_picker: None,
             font_names,
             mono_family,
+            step_clean_input: String::new(),
+            step_clean_output: String::new(),
+            step_clean_running: false,
+            step_clean_progress: (0, 0),
+            step_clean_logs: Vec::new(),
+            step_clean_summary: None,
+            step_clean_rx: None,
         }
     }
 
@@ -674,6 +700,14 @@ impl SeexUi {
                 self.schematic_fill_hex.clone(),
             ),
             InputSlot::FontSearch => (locale::t("Search fonts", "搜索字体"), String::new()),
+            InputSlot::StepCleanInput => (
+                locale::t("STEP file or directory", "STEP 文件或目录"),
+                self.step_clean_input.clone(),
+            ),
+            InputSlot::StepCleanOutput => (
+                locale::t("Destination directory", "另存目标文件夹"),
+                self.step_clean_output.clone(),
+            ),
         }
     }
 
@@ -726,6 +760,12 @@ impl SeexUi {
                 cx.notify();
                 return;
             }
+            InputSlot::StepCleanInput => {
+                self.step_clean_input = value;
+            }
+            InputSlot::StepCleanOutput => {
+                self.step_clean_output = value;
+            }
         }
         self.mark_config_dirty();
         cx.notify();
@@ -737,6 +777,7 @@ impl SeexUi {
         if self.poll_file_dialog() {
             cx.notify();
         }
+        self.poll_step_cleaner(cx);
         self.process_config_save();
         self.sync_system_theme(cx);
         self.check_for_updates_when_due();
@@ -857,7 +898,12 @@ impl SeexUi {
                     .add_filter("CSV", &["csv"])
                     .set_file_name("matched.csv")
                     .save_file(),
-                FileDialogKind::PickFolder => rfd::FileDialog::new().pick_folder(),
+                FileDialogKind::PickFolder
+                | FileDialogKind::PickStepInputFolder
+                | FileDialogKind::PickStepOutputFolder => rfd::FileDialog::new().pick_folder(),
+                FileDialogKind::PickStepInputFile => rfd::FileDialog::new()
+                    .add_filter("STEP Model", &["step", "stp", "STEP", "STP"])
+                    .pick_file(),
             };
             let _ = sender.send(FileDialogResult { kind, path });
         });
@@ -883,24 +929,128 @@ impl SeexUi {
             self.file_dialog_start_time = None;
             if let Some(path) = result.path {
                 let path = crate::monitor::normalize_path_string(&path.to_string_lossy());
-                let slot = match result.kind {
-                    FileDialogKind::SaveCsv => InputSlot::MatchedPath,
-                    FileDialogKind::PickFolder => InputSlot::ExportPath,
-                };
-                if let Ok(mut state) = self.state.lock() {
-                    match result.kind {
-                        FileDialogKind::SaveCsv => state.set_matched_save_path(path),
-                        FileDialogKind::PickFolder => state.set_export_output_path(path),
+                match result.kind {
+                    FileDialogKind::SaveCsv => {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.set_matched_save_path(path);
+                        }
+                        self.inputs.remove(&InputSlot::MatchedPath);
+                        applied = true;
+                        self.mark_config_dirty();
+                    }
+                    FileDialogKind::PickFolder => {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.set_export_output_path(path);
+                        }
+                        self.inputs.remove(&InputSlot::ExportPath);
+                        applied = true;
+                        self.mark_config_dirty();
+                    }
+                    FileDialogKind::PickStepInputFile | FileDialogKind::PickStepInputFolder => {
+                        self.step_clean_input = path;
+                        self.inputs.remove(&InputSlot::StepCleanInput);
+                        applied = true;
+                    }
+                    FileDialogKind::PickStepOutputFolder => {
+                        self.step_clean_output = path;
+                        self.inputs.remove(&InputSlot::StepCleanOutput);
+                        applied = true;
                     }
                 }
-                // Drop the cached box so the next frame seeds it from the value
-                // that was just set, instead of showing the previous folder.
-                self.inputs.remove(&slot);
-                applied = true;
-                self.mark_config_dirty();
             }
         }
         applied
+    }
+
+    pub fn start_step_cleaning(&mut self) {
+        let input = PathBuf::from(self.step_clean_input.trim());
+        let output = PathBuf::from(self.step_clean_output.trim());
+        if !input.exists() {
+            self.show_toast_error(locale::t(
+                "Input path does not exist",
+                "源路径不存在",
+            ));
+            return;
+        }
+
+        self.step_clean_running = true;
+        self.step_clean_progress = (0, 0);
+        self.step_clean_logs.clear();
+        self.step_clean_summary = None;
+
+        let (tx, rx) = mpsc::channel();
+        self.step_clean_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let options = crate::step_cleaner::CleanStepOptions {
+                input,
+                output,
+                recursive: true,
+            };
+
+            let summary = crate::step_cleaner::clean_step(&options, |curr, total, item| {
+                let status = match item.outcome {
+                    crate::step_logo::LogoOutcome::Removed(rem) => {
+                        format!("✓ 去标成功 (移除 {} 碎片, {} 几何面)", rem.pieces, rem.faces)
+                    }
+                    crate::step_logo::LogoOutcome::NotFound => "○ 无 Logo (原样保存)".to_string(),
+                    crate::step_logo::LogoOutcome::Kept => "⚠ 检测到 Logo 但流形保护保留".to_string(),
+                    crate::step_logo::LogoOutcome::Unreadable => "✗ 无法解析的 STEP 模型".to_string(),
+                };
+                let name = item.src_path.file_name().unwrap_or_default().to_string_lossy();
+                let log = if let Some(err) = &item.error {
+                    format!("[{curr}/{total}] {name}: 错误: {err}")
+                } else {
+                    format!("[{curr}/{total}] {name}: {status}")
+                };
+                let _ = tx.send(StepCleanProgressMsg::Progress {
+                    current: curr,
+                    total,
+                    log,
+                });
+            });
+
+            let _ = tx.send(StepCleanProgressMsg::Finished(summary));
+        });
+    }
+
+    fn poll_step_cleaner(&mut self, cx: &mut Context<Self>) {
+        let mut messages = Vec::new();
+        if let Some(rx) = &self.step_clean_rx {
+            while let Ok(msg) = rx.try_recv() {
+                messages.push(msg);
+            }
+        }
+        for msg in messages {
+            match msg {
+                StepCleanProgressMsg::Progress { current, total, log } => {
+                    self.step_clean_progress = (current, total);
+                    self.step_clean_logs.push(log);
+                    if self.step_clean_logs.len() > 1000 {
+                        self.step_clean_logs.remove(0);
+                    }
+                    cx.notify();
+                }
+                StepCleanProgressMsg::Finished(summary) => {
+                    self.step_clean_running = false;
+                    let msg = if locale::lang() == locale::Lang::Zh {
+                        format!("3D去标完成：成功去标 {} 个模型", summary.cleaned_count)
+                    } else {
+                        format!("3D logo removal complete: {} cleaned", summary.cleaned_count)
+                    };
+                    self.show_toast_success(msg);
+                    self.step_clean_summary = Some(summary);
+                    self.step_clean_rx = None;
+                    cx.notify();
+                }
+                StepCleanProgressMsg::Error(err) => {
+                    self.step_clean_running = false;
+                    self.show_toast_error(err);
+                    self.step_clean_rx = None;
+                    cx.notify();
+                }
+            }
+        }
     }
 
     pub fn show_toast_success(&mut self, message: impl Into<String>) {
@@ -1032,6 +1182,7 @@ impl SeexUi {
             .child(self.nav_item(Page::Monitor, locale::t("Monitor", "监听"), cx))
             .child(self.nav_item(Page::History, locale::t("History", "历史"), cx))
             .child(self.nav_item(Page::Export, locale::t("Export", "导出"), cx))
+            .child(self.nav_item(Page::StepClean, locale::t("3D Tools", "3D去标"), cx))
             .child(self.nav_item(Page::Font, locale::t("Font", "字体"), cx))
             .child(self.nav_item(Page::More, locale::t("More", "更多"), cx))
             .child(div().flex_1())
@@ -1096,6 +1247,7 @@ impl SeexUi {
             Page::Monitor => self.monitor_page(window, cx),
             Page::History => self.history_page(cx),
             Page::Export => self.export_page(window, cx),
+            Page::StepClean => self.step_clean_page(window, cx),
             Page::More => self.more_page(cx),
             Page::Font => self.font_page(window, cx),
         };

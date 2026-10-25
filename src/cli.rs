@@ -91,6 +91,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: KicadCommands,
     },
+    /// Strip EasyEDA / LCEDA 3D logo from STEP file(s) and save to output directory
+    #[command(name = "clean-step", alias = "strip-logo")]
+    CleanStep {
+        /// Input STEP file or directory
+        #[arg(short = 'i', long, value_name = "PATH")]
+        input: Option<PathBuf>,
+        /// Destination directory to save cleaned STEP files
+        #[arg(short = 'o', long, value_name = "DIR")]
+        output: Option<PathBuf>,
+        /// Positional input STEP file or directory
+        #[arg(index = 1)]
+        pos_input: Option<PathBuf>,
+        /// Positional destination directory
+        #[arg(index = 2)]
+        pos_output: Option<PathBuf>,
+        /// Recursively process subdirectories if input is a directory
+        #[arg(short = 'r', long, default_value_t = true)]
+        recursive: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -256,6 +275,84 @@ pub enum KicadCommands {
 pub enum KicadVersion {
     V5,
     V6,
+}
+
+pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Commands::CleanStep {
+            input,
+            output,
+            pos_input,
+            pos_output,
+            recursive,
+        }) => {
+            let input = input
+                .or(pos_input)
+                .ok_or("Missing input path. Usage: seex clean-step <INPUT_PATH> <OUTPUT_DIR>")?;
+            let output = output
+                .or(pos_output)
+                .ok_or("Missing output directory. Usage: seex clean-step <INPUT_PATH> <OUTPUT_DIR>")?;
+            run_clean_step(&input, &output, recursive)?;
+        }
+        Some(_) => {
+            println!("This subcommand requires the full GUI or is not yet implemented in headless mode.");
+            println!("Run 'seex --help' for available CLI options, or run without arguments to launch the GUI.");
+        }
+        None => {
+            if cli.prompt {
+                println!("Ready-to-run examples:");
+                println!("  seex clean-step ./input.step ./output_dir");
+                println!("  seex clean-step -i ./step_models -o ./cleaned -r");
+            } else {
+                println!("Run 'seex --help' for usage, or run without arguments to launch the GUI.");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_clean_step(input: &std::path::Path, output: &std::path::Path, recursive: bool) -> Result<(), Box<dyn std::error::Error>> {
+    println!("=== SeEx 3D STEP Logo Remover ===");
+    println!("Input:       {}", input.display());
+    println!("Destination: {}", output.display());
+    println!("Recursive:   {}", recursive);
+    println!("---------------------------------");
+
+    let options = crate::step_cleaner::CleanStepOptions {
+        input: input.to_path_buf(),
+        output: output.to_path_buf(),
+        recursive,
+    };
+
+    let summary = crate::step_cleaner::clean_step(&options, |idx, total, item| {
+        let status = match item.outcome {
+            crate::step_logo::LogoOutcome::Removed(rem) => {
+                format!("REMOVED ({} pieces, {} faces)", rem.pieces, rem.faces)
+            }
+            crate::step_logo::LogoOutcome::NotFound => "No logo found".to_string(),
+            crate::step_logo::LogoOutcome::Kept => "Logo detected but kept (safety)".to_string(),
+            crate::step_logo::LogoOutcome::Unreadable => "Unreadable STEP file".to_string(),
+        };
+
+        let file_name = item.src_path.file_name().unwrap_or_default().to_string_lossy();
+        if let Some(err) = &item.error {
+            eprintln!("[{idx}/{total}] {file_name}: ERROR: {err}");
+        } else {
+            println!("[{idx}/{total}] {file_name}: {status} -> {}", item.dest_path.display());
+        }
+    });
+
+    println!("---------------------------------");
+    println!("Summary:");
+    println!("  Total files scanned:     {}", summary.total_files);
+    println!("  3D Logo removed:         {} ({} pieces, {} faces)", summary.cleaned_count, summary.cleaned_pieces, summary.cleaned_faces);
+    println!("  Already clean (no logo):  {}", summary.not_found_count);
+    println!("  Kept with logo:          {}", summary.kept_count);
+    println!("  Unreadable:              {}", summary.unreadable_count);
+    println!("  Errors:                  {}", summary.error_count);
+
+    Ok(())
 }
 
 #[cfg(test)]
