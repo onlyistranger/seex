@@ -1,3 +1,4 @@
+use crate::cli::KicadVersion;
 use crate::easyeda::svg_parser::{SvgCommand, parse_svg_path};
 use crate::easyeda::{ComponentData, FootprintImporter};
 use crate::error::Result;
@@ -17,9 +18,6 @@ pub fn convert_footprint(
     lib_manager: &LibraryManager,
     lcsc_id: &str,
 ) -> Result<()> {
-    let ee_footprint = FootprintImporter::parse(&component_data.package_detail)?;
-    let converter = Converter::new(args.kicad_version);
-
     let clean_fp_name = restore_footprint_name(&component_data.title, args.replace_dot);
     let suffixed_fp_name = make_suffixed_name(&component_data.title, lcsc_id, args.replace_dot);
 
@@ -36,9 +34,122 @@ pub fn convert_footprint(
         clean_fp_name.clone()
     };
 
+    let mut ki_footprint = build_ki_footprint(component_data, &primary_fp_name)?;
+
+    // Add 3D model reference if available
+    if let (Some(model_info), Some((clean_m, suffixed_m))) =
+        (&component_data.model_3d, &clean_model_info)
+        && args.targets_model_3d()
+    {
+        let model_name = if args.add_suffix { suffixed_m } else { clean_m };
+        let model_lib_name = lib_manager.model_lib_name();
+        let model_dir_name = lib_manager.model_dir_name();
+        let model_path = format!(
+            "${{{}}}/{}/{}.step",
+            model_lib_name, model_dir_name, model_name
+        );
+
+        ki_footprint.model_3d = Some(kicad::Ki3dModel {
+            path: model_path,
+            offset: (0.0, 0.0, 0.0),
+            scale: (1.0, 1.0, 1.0),
+            rotate: (
+                0.0,
+                0.0,
+                crate::util::model_rotation_z(model_info.rotation_z),
+            ),
+        });
+    }
+
+    let exporter = kicad::FootprintExporter::new();
+
+    if args.add_suffix {
+        // Export footprint (suffixed)
+        let footprint_data = exporter.export(&ki_footprint)?;
+        let (_, status) =
+            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
+
+        match status {
+            FileWriteStatus::Written => log::debug!("Wrote footprint: {}", ki_footprint.name),
+            FileWriteStatus::Skipped => {
+                log::debug!("Skipped existing footprint: {}", ki_footprint.name)
+            }
+        }
+
+        // Also export clean non-suffixed footprint
+        let mut clean_footprint = ki_footprint.clone();
+        clean_footprint.name = clean_fp_name.clone();
+
+        if let (Some(model_info), Some((clean_m, _))) =
+            (&component_data.model_3d, &clean_model_info)
+            && args.targets_model_3d()
+        {
+            let model_lib_name = lib_manager.model_lib_name();
+            let model_dir_name = lib_manager.model_dir_name();
+            let model_path = format!(
+                "${{{}}}/{}/{}.step",
+                model_lib_name, model_dir_name, clean_m
+            );
+
+            clean_footprint.model_3d = Some(kicad::Ki3dModel {
+                path: model_path,
+                offset: (0.0, 0.0, 0.0),
+                scale: (1.0, 1.0, 1.0),
+                rotate: (
+                    0.0,
+                    0.0,
+                    crate::util::model_rotation_z(model_info.rotation_z),
+                ),
+            });
+        }
+
+        let clean_footprint_data = exporter.export(&clean_footprint)?;
+        let (_, clean_status) = lib_manager.write_footprint_if_needed(
+            &clean_footprint.name,
+            &clean_footprint_data,
+            args.force,
+        )?;
+
+        match clean_status {
+            FileWriteStatus::Written => {
+                log::debug!("Wrote clean footprint: {}", clean_footprint.name)
+            }
+            FileWriteStatus::Skipped => {
+                log::debug!("Skipped existing clean footprint: {}", clean_footprint.name)
+            }
+        }
+    } else {
+        // Export ONLY clean footprint
+        let footprint_data = exporter.export(&ki_footprint)?;
+        let (_, status) =
+            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
+
+        match status {
+            FileWriteStatus::Written => log::debug!("Wrote clean footprint: {}", ki_footprint.name),
+            FileWriteStatus::Skipped => {
+                log::debug!("Skipped existing clean footprint: {}", ki_footprint.name)
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Convert EasyEDA footprint data into the EDA-neutral `KiFootprint` model.
+///
+/// Coordinates stay in EasyEDA units (1 px = 10 mil) with Y pointing down, relative
+/// to the package bbox origin. A courtyard is generated when the source has none.
+/// No 3D model is attached; callers decide how models are referenced.
+pub fn build_ki_footprint(
+    component_data: &ComponentData,
+    footprint_name: &str,
+) -> Result<kicad::KiFootprint> {
+    let ee_footprint = FootprintImporter::parse(&component_data.package_detail)?;
+    let converter = Converter::new(KicadVersion::V6);
+
     // Convert EasyEDA footprint to KiCad footprint
     let mut ki_footprint = kicad::KiFootprint {
-        name: primary_fp_name,
+        name: footprint_name.to_string(),
         pads: Vec::new(),
         tracks: Vec::new(),
         circles: Vec::new(),
@@ -442,106 +553,7 @@ pub fn convert_footprint(
 
     add_generated_courtyard_if_missing(&mut ki_footprint, &converter);
 
-    // Add 3D model reference if available
-    if let (Some(model_info), Some((clean_m, suffixed_m))) =
-        (&component_data.model_3d, &clean_model_info)
-        && args.targets_model_3d()
-    {
-        let model_name = if args.add_suffix { suffixed_m } else { clean_m };
-        let model_lib_name = lib_manager.model_lib_name();
-        let model_dir_name = lib_manager.model_dir_name();
-        let model_path = format!(
-            "${{{}}}/{}/{}.step",
-            model_lib_name, model_dir_name, model_name
-        );
-
-        ki_footprint.model_3d = Some(kicad::Ki3dModel {
-            path: model_path,
-            // The model's own coordinates already place it: its rotation is the only thing the
-            // exported footprint adds, and the STEP itself is lifted onto the board plane when it
-            // is written (see `crate::step_model`).
-            offset: (0.0, 0.0, 0.0),
-            scale: (1.0, 1.0, 1.0),
-            rotate: (
-                0.0,
-                0.0,
-                crate::util::model_rotation_z(model_info.rotation_z),
-            ),
-        });
-    }
-
-    let exporter = kicad::FootprintExporter::new();
-
-    if args.add_suffix {
-        // Export footprint (suffixed)
-        let footprint_data = exporter.export(&ki_footprint)?;
-        let (_, status) =
-            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
-
-        match status {
-            FileWriteStatus::Written => log::debug!("Wrote footprint: {}", ki_footprint.name),
-            FileWriteStatus::Skipped => {
-                log::debug!("Skipped existing footprint: {}", ki_footprint.name)
-            }
-        }
-
-        // Also export clean non-suffixed footprint
-        let mut clean_footprint = ki_footprint.clone();
-        clean_footprint.name = clean_fp_name.clone();
-
-        if let (Some(model_info), Some((clean_m, _))) =
-            (&component_data.model_3d, &clean_model_info)
-            && args.targets_model_3d()
-        {
-            let model_lib_name = lib_manager.model_lib_name();
-            let model_dir_name = lib_manager.model_dir_name();
-            let model_path = format!(
-                "${{{}}}/{}/{}.step",
-                model_lib_name, model_dir_name, clean_m
-            );
-
-            clean_footprint.model_3d = Some(kicad::Ki3dModel {
-                path: model_path,
-                offset: (0.0, 0.0, 0.0),
-                scale: (1.0, 1.0, 1.0),
-                rotate: (
-                    0.0,
-                    0.0,
-                    crate::util::model_rotation_z(model_info.rotation_z),
-                ),
-            });
-        }
-
-        let clean_footprint_data = exporter.export(&clean_footprint)?;
-        let (_, clean_status) = lib_manager.write_footprint_if_needed(
-            &clean_footprint.name,
-            &clean_footprint_data,
-            args.force,
-        )?;
-
-        match clean_status {
-            FileWriteStatus::Written => {
-                log::debug!("Wrote clean footprint: {}", clean_footprint.name)
-            }
-            FileWriteStatus::Skipped => {
-                log::debug!("Skipped existing clean footprint: {}", clean_footprint.name)
-            }
-        }
-    } else {
-        // Export ONLY clean footprint
-        let footprint_data = exporter.export(&ki_footprint)?;
-        let (_, status) =
-            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
-
-        match status {
-            FileWriteStatus::Written => log::debug!("Wrote clean footprint: {}", ki_footprint.name),
-            FileWriteStatus::Skipped => {
-                log::debug!("Skipped existing clean footprint: {}", ki_footprint.name)
-            }
-        }
-    }
-
-    Ok(())
+    Ok(ki_footprint)
 }
 
 
@@ -741,7 +753,6 @@ impl Bounds {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::KicadVersion;
 
     #[test]
     fn generates_front_courtyard_when_missing() {
@@ -844,6 +855,7 @@ mod tests {
             download_pdf: true,
             add_suffix: true,
             replace_dot: false,
+            ..Default::default()
         };
 
         let component_data = ComponentData {
@@ -864,10 +876,12 @@ mod tests {
                 uuid: "dummy-uuid".to_string(),
                 title: "CONN-TH_XT30PW-M".to_string(),
                 rotation_z: 0.0,
+                placement: None,
             }),
             manufacturer: "".to_string(),
             datasheet: "".to_string(),
             jlc_id: "".to_string(),
+            package: String::new(),
         };
 
         convert_footprint(&options, &component_data, &lib_manager, "C431092").unwrap();
@@ -907,6 +921,7 @@ mod tests {
             download_pdf: true,
             add_suffix: false,
             replace_dot: false,
+            ..Default::default()
         };
 
         let component_data = ComponentData {
@@ -927,10 +942,12 @@ mod tests {
                 uuid: "dummy-uuid".to_string(),
                 title: "CONN-TH_XT30PW-M".to_string(),
                 rotation_z: 0.0,
+                placement: None,
             }),
             manufacturer: "".to_string(),
             datasheet: "".to_string(),
             jlc_id: "".to_string(),
+            package: String::new(),
         };
 
         convert_footprint(&options, &component_data, &lib_manager, "C431092").unwrap();

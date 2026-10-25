@@ -1,6 +1,8 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::cli::KicadVersion;
+use crate::step_model::ModelCleanup;
 
 #[derive(Debug, Clone)]
 pub struct KicadExportOptions {
@@ -10,6 +12,8 @@ pub struct KicadExportOptions {
     pub full: bool,
     pub force: bool,
     pub kicad_version: KicadVersion,
+    /// What happens to downloaded 3D models before they are written (logo removal).
+    pub models: Arc<ModelCleanup>,
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
@@ -24,6 +28,7 @@ impl Default for KicadExportOptions {
             full: false,
             force: false,
             kicad_version: KicadVersion::V6,
+            models: Arc::new(ModelCleanup::default()),
             download_pdf: true,
             add_suffix: true,
             replace_dot: false,

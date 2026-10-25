@@ -341,7 +341,6 @@ pub fn run() {
         if let Err(error) = opened {
             eprintln!("SeEx: could not open its window: {error}");
         } else {
-            set_always_on_top(false);
             round_window_corners();
         }
 
@@ -735,7 +734,9 @@ impl SeexUi {
     /// The repaint work the egui `update` did on a timer: follow the system
     /// theme, collect file-dialog answers, flush config writes, expire notices.
     fn tick(&mut self, cx: &mut Context<Self>) {
-        self.poll_file_dialog();
+        if self.poll_file_dialog() {
+            cx.notify();
+        }
         self.process_config_save();
         self.sync_system_theme(cx);
         self.check_for_updates_when_due();
@@ -862,7 +863,12 @@ impl SeexUi {
         });
     }
 
-    fn poll_file_dialog(&mut self) {
+    /// Applies any answer the file dialog has produced.
+    ///
+    /// Returns whether one was applied, so the caller can repaint: the text
+    /// boxes are built once and keep their own text, so without a repaint the
+    /// folder that was just picked would not appear until the next launch.
+    fn poll_file_dialog(&mut self) -> bool {
         if let Some(start_time) = self.file_dialog_start_time {
             if start_time.elapsed() > Duration::from_secs(30) {
                 self.file_dialog_running = false;
@@ -871,20 +877,30 @@ impl SeexUi {
             }
         }
 
+        let mut applied = false;
         while let Ok(result) = self.file_dialog_rx.try_recv() {
             self.file_dialog_running = false;
             self.file_dialog_start_time = None;
             if let Some(path) = result.path {
+                let path = crate::monitor::normalize_path_string(&path.to_string_lossy());
+                let slot = match result.kind {
+                    FileDialogKind::SaveCsv => InputSlot::MatchedPath,
+                    FileDialogKind::PickFolder => InputSlot::ExportPath,
+                };
                 if let Ok(mut state) = self.state.lock() {
-                    let path = crate::monitor::normalize_path_string(&path.to_string_lossy());
                     match result.kind {
                         FileDialogKind::SaveCsv => state.set_matched_save_path(path),
                         FileDialogKind::PickFolder => state.set_export_output_path(path),
                     }
                 }
+                // Drop the cached box so the next frame seeds it from the value
+                // that was just set, instead of showing the previous folder.
+                self.inputs.remove(&slot);
+                applied = true;
                 self.mark_config_dirty();
             }
         }
+        applied
     }
 
     pub fn show_toast_success(&mut self, message: impl Into<String>) {
@@ -1262,6 +1278,7 @@ pub fn apply_config_to_state(config: &AppConfig, state: &mut MonitorState) {
     state.set_export_target(config.export.target.clone());
     state.set_export_mode(config.export.mode.clone());
     state.set_export_kicad_mode(config.export.kicad_mode.clone());
+    state.set_export_cadence_mode(config.export.cadence_mode.clone());
     state.set_export_merge(config.export.merge);
     state.set_export_append(config.export.append);
     state.set_export_library_name(config.export.library_name.clone());
@@ -1269,6 +1286,7 @@ pub fn apply_config_to_state(config: &AppConfig, state: &mut MonitorState) {
     state.set_export_continue_on_error(config.export.continue_on_error);
     state.set_export_lcsc_english(config.export.lcsc_english);
     state.set_export_force(config.export.force);
+    state.set_export_remove_model_logo(config.export.remove_model_logo);
     state.set_export_download_pdf(config.export.download_pdf);
     state.set_export_add_suffix(config.export.add_suffix);
     state.set_export_replace_dot(config.export.replace_dot);
@@ -1292,6 +1310,7 @@ pub fn snapshot_config(
             output_path: state.export_output_path.clone(),
             mode: state.export_mode.clone(),
             kicad_mode: state.export_kicad_mode.clone(),
+            cadence_mode: state.export_cadence_mode.clone(),
             merge: state.export_merge,
             append: state.export_append,
             library_name: state.export_library_name.clone(),
@@ -1301,6 +1320,7 @@ pub fn snapshot_config(
             force: state.export_force,
             schematic_stroke_color,
             schematic_fill_color,
+            remove_model_logo: state.export_remove_model_logo,
             download_pdf: state.export_download_pdf,
             add_suffix: state.export_add_suffix,
             replace_dot: state.export_replace_dot,

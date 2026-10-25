@@ -97,6 +97,8 @@ pub async fn convert_3d_model(
 
     match result {
         Ok(step_data) => {
+            let step_data = args.models.clean(lcsc_id, &step_data);
+
             // Write suffixed STEP model
             if args.add_suffix && (args.force || !step_path.exists()) {
                 lib_manager.write_step_model(&model_name, &step_data)?;
@@ -108,7 +110,6 @@ pub async fn convert_3d_model(
                 lib_manager.write_step_model(&clean_model_name, &step_data)?;
                 log::debug!("Wrote clean STEP model: {}", clean_model_name);
             }
-
             Ok(ModelExportStatus::Written)
         }
         Err(e) => Err(e),
