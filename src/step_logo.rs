@@ -55,6 +55,8 @@ const ROW_REQUIRED: [(usize, usize); 4] = [(6, 0), (10, 8), (12, 0), (10, 4)];
 /// What [`strip_logo`] took out.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct LogoRemoval {
+    /// Number of distinct logo instances / sites removed.
+    pub logos: usize,
     /// Logo pieces (icon, letters).
     pub pieces: usize,
     /// Faces deleted, thin solids included.
@@ -99,13 +101,15 @@ fn remove_logo(data: &[u8]) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
     let mut model = Model::parse(&text).ok_or(LogoOutcome::Unreadable)?;
     let geometry = Geometry::new(&model);
     let pieces = geometry.pieces();
-    let mut selected = select_logo(&pieces);
+    let (mut selected, mut logos) = select_logo(&pieces);
     // Some models draw the icon across the edge of the face the words sit on, so
     // it is not a separate relief: take the words, and colour the icon like the
     // face under it instead of cutting it out.
     let mut icon_faces: HashSet<u64> = HashSet::new();
     if selected.is_empty() {
-        selected = select_words(&pieces);
+        let (words_selected, words_logos) = select_words(&pieces);
+        selected = words_selected;
+        logos = words_logos;
         if selected.is_empty() {
             return Err(LogoOutcome::NotFound);
         }
@@ -116,7 +120,10 @@ fn remove_logo(data: &[u8]) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
         .find_map(|&i| pieces[i].loops.first().map(|&(face, _)| face));
     let mut dead: HashSet<u64> = HashSet::new();
     let mut loops: Vec<(u64, u64)> = Vec::new();
-    let mut removal = LogoRemoval::default();
+    let mut removal = LogoRemoval {
+        logos: logos.max(1),
+        ..Default::default()
+    };
     for &index in &selected {
         let piece = &pieces[index];
         removal.pieces += 1;
@@ -1015,13 +1022,15 @@ fn recolour(model: &mut Model, faces: &HashSet<u64>, like: u64) -> usize {
 
 /// The "LCEDA" and "EasyEDA" words without their icon: twelve coplanar letters
 /// next to each other that include every letter shape of the logo.
-fn select_words(pieces: &[Piece]) -> Vec<usize> {
+fn select_words(pieces: &[Piece]) -> (Vec<usize>, usize) {
     let letters: Vec<usize> = (0..pieces.len())
         .filter(|&i| pieces[i].solid.is_none() && LOGO_LETTERS.contains(&pieces[i].shape))
         .collect();
     let mut seen: HashSet<usize> = HashSet::new();
+    let mut chosen: HashSet<usize> = HashSet::new();
+    let mut logo_count = 0;
     for &start in &letters {
-        if seen.contains(&start) {
+        if seen.contains(&start) || chosen.contains(&start) {
             continue;
         }
         let mut group = vec![start];
@@ -1033,6 +1042,7 @@ fn select_words(pieces: &[Piece]) -> Vec<usize> {
                 .fold(0.0, f64::max);
             for &other in &letters {
                 if !group.contains(&other)
+                    && !chosen.contains(&other)
                     && coplanar(&pieces[other], current)
                     && gap(&pieces[other], current) <= 0.8 * height
                 {
@@ -1044,16 +1054,19 @@ fn select_words(pieces: &[Piece]) -> Vec<usize> {
         seen.extend(group.iter().copied());
         let shapes: Vec<(usize, usize)> = group.iter().map(|&i| pieces[i].shape).collect();
         if group.len() == 12 && LOGO_LETTERS.iter().all(|s| shapes.contains(s)) {
-            group.sort_unstable();
-            return group;
+            chosen.extend(group);
+            logo_count += 1;
         }
     }
-    Vec::new()
+    let mut chosen: Vec<usize> = chosen.into_iter().collect();
+    chosen.sort_unstable();
+    (chosen, logo_count)
 }
 
-/// Indices of the pieces that make up the logo.
-fn select_logo(pieces: &[Piece]) -> Vec<usize> {
+/// Indices of the pieces that make up the logo and the number of distinct logos found.
+fn select_logo(pieces: &[Piece]) -> (Vec<usize>, usize) {
     let mut chosen: HashSet<usize> = HashSet::new();
+    let mut logo_count = 0;
     // Icon and the words next to it.
     for (icon, piece) in pieces.iter().enumerate() {
         if !shape_like(piece, ICON) || chosen.contains(&icon) {
@@ -1068,6 +1081,7 @@ fn select_logo(pieces: &[Piece]) -> Vec<usize> {
         loop {
             let next = pieces.iter().enumerate().position(|(i, p)| {
                 !group.contains(&i)
+                    && !chosen.contains(&i)
                     && coplanar(p, piece)
                     && (inside(p, lo, hi)
                         || ((LOGO_LETTERS.iter().any(|&s| shape_like(p, s))
@@ -1084,6 +1098,7 @@ fn select_logo(pieces: &[Piece]) -> Vec<usize> {
         // Icon plus at least the five letters of one word.
         if group.len() >= 6 {
             chosen.extend(group);
+            logo_count += 1;
         }
     }
     // Separate "LCEDA" rows.
@@ -1092,7 +1107,7 @@ fn select_logo(pieces: &[Piece]) -> Vec<usize> {
         .collect();
     let mut seen: HashSet<usize> = HashSet::new();
     for &start in &rest {
-        if seen.contains(&start) {
+        if seen.contains(&start) || chosen.contains(&start) {
             continue;
         }
         let mut group = vec![start];
@@ -1104,6 +1119,7 @@ fn select_logo(pieces: &[Piece]) -> Vec<usize> {
                 .fold(0.0, f64::max);
             for &other in &rest {
                 if !group.contains(&other)
+                    && !chosen.contains(&other)
                     && coplanar(&pieces[other], current)
                     && gap(&pieces[other], current) <= 0.6 * height
                 {
@@ -1116,11 +1132,12 @@ fn select_logo(pieces: &[Piece]) -> Vec<usize> {
         let shapes: Vec<(usize, usize)> = group.iter().map(|&i| pieces[i].shape).collect();
         if group.len() == 5 && ROW_REQUIRED.iter().all(|s| shapes.contains(s)) {
             chosen.extend(group);
+            logo_count += 1;
         }
     }
     let mut chosen: Vec<usize> = chosen.into_iter().collect();
     chosen.sort_unstable();
-    chosen
+    (chosen, logo_count)
 }
 
 /// Whether `piece` has the logo shape `shape` (side faces, curved side faces).
