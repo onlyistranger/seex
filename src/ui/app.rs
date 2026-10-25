@@ -991,7 +991,7 @@ impl SeexUi {
             let summary = crate::step_cleaner::clean_step(&options, |curr, total, item| {
                 let status = match item.outcome {
                     crate::step_logo::LogoOutcome::Removed(rem) => {
-                        format!("✓ 去标成功 (移除 {} 碎片, {} 几何面)", rem.pieces, rem.faces)
+                        format!("✓ 去标成功 (移除 {} 处 Logo, {} 碎片, {} 几何面)", rem.logos, rem.pieces, rem.faces)
                     }
                     crate::step_logo::LogoOutcome::NotFound => "○ 无 Logo (原样保存)".to_string(),
                     crate::step_logo::LogoOutcome::Kept => "⚠ 检测到 Logo 但流形保护保留".to_string(),
@@ -1034,9 +1034,15 @@ impl SeexUi {
                 StepCleanProgressMsg::Finished(summary) => {
                     self.step_clean_running = false;
                     let msg = if locale::lang() == locale::Lang::Zh {
-                        format!("3D去标完成：成功去标 {} 个模型", summary.cleaned_count)
+                        format!(
+                            "3D去标完成：成功去标 {} 处 Logo（共修改 {} 个文件）",
+                            summary.cleaned_logos_count, summary.cleaned_files_count
+                        )
                     } else {
-                        format!("3D logo removal complete: {} cleaned", summary.cleaned_count)
+                        format!(
+                            "3D logo removal complete: {} logos removed across {} files",
+                            summary.cleaned_logos_count, summary.cleaned_files_count
+                        )
                     };
                     self.show_toast_success(msg);
                     self.step_clean_summary = Some(summary);

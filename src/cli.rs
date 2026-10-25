@@ -328,7 +328,7 @@ fn run_clean_step(input: &std::path::Path, output: &std::path::Path, recursive: 
     let summary = crate::step_cleaner::clean_step(&options, |idx, total, item| {
         let status = match item.outcome {
             crate::step_logo::LogoOutcome::Removed(rem) => {
-                format!("REMOVED ({} pieces, {} faces)", rem.pieces, rem.faces)
+                format!("REMOVED {} logo(s) ({} pieces, {} faces)", rem.logos, rem.pieces, rem.faces)
             }
             crate::step_logo::LogoOutcome::NotFound => "No logo found".to_string(),
             crate::step_logo::LogoOutcome::Kept => "Logo detected but kept (safety)".to_string(),
@@ -346,7 +346,8 @@ fn run_clean_step(input: &std::path::Path, output: &std::path::Path, recursive: 
     println!("---------------------------------");
     println!("Summary:");
     println!("  Total files scanned:     {}", summary.total_files);
-    println!("  3D Logo removed:         {} ({} pieces, {} faces)", summary.cleaned_count, summary.cleaned_pieces, summary.cleaned_faces);
+    println!("  Files modified:          {} / {}", summary.cleaned_files_count, summary.total_files);
+    println!("  3D Logos removed:        {} ({} pieces, {} faces)", summary.cleaned_logos_count, summary.cleaned_pieces, summary.cleaned_faces);
     println!("  Already clean (no logo):  {}", summary.not_found_count);
     println!("  Kept with logo:          {}", summary.kept_count);
     println!("  Unreadable:              {}", summary.unreadable_count);

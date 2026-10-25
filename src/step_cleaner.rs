@@ -33,6 +33,11 @@ pub struct CleanStepItemDetail {
 #[derive(Debug, Default, Clone)]
 pub struct CleanStepSummary {
     pub total_files: usize,
+    /// Number of distinct logo instances / surfaces removed across all files.
+    pub cleaned_logos_count: usize,
+    /// Number of files that had at least one logo removed.
+    pub cleaned_files_count: usize,
+    /// Total logos removed (alias for `cleaned_logos_count`).
     pub cleaned_count: usize,
     pub cleaned_pieces: usize,
     pub cleaned_faces: usize,
@@ -158,7 +163,9 @@ where
 
         match outcome {
             LogoOutcome::Removed(removal) => {
-                summary.cleaned_count += 1;
+                summary.cleaned_files_count += 1;
+                summary.cleaned_logos_count += removal.logos;
+                summary.cleaned_count += removal.logos;
                 summary.cleaned_pieces += removal.pieces;
                 summary.cleaned_faces += removal.faces;
             }
@@ -274,4 +281,29 @@ mod tests {
 
         let _ = fs::remove_dir_all(temp_dir);
     }
+
+    #[test]
+    fn test_clean_step_summary_stats() {
+        let mut summary = CleanStepSummary::default();
+        let removal = crate::step_logo::LogoRemoval {
+            logos: 3,
+            pieces: 36,
+            faces: 84,
+        };
+        let outcome = LogoOutcome::Removed(removal);
+        if let LogoOutcome::Removed(rem) = outcome {
+            summary.cleaned_files_count += 1;
+            summary.cleaned_logos_count += rem.logos;
+            summary.cleaned_count += rem.logos;
+            summary.cleaned_pieces += rem.pieces;
+            summary.cleaned_faces += rem.faces;
+        }
+
+        assert_eq!(summary.cleaned_files_count, 1);
+        assert_eq!(summary.cleaned_logos_count, 3);
+        assert_eq!(summary.cleaned_count, 3);
+        assert_eq!(summary.cleaned_pieces, 36);
+        assert_eq!(summary.cleaned_faces, 84);
+    }
 }
+

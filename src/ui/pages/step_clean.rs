@@ -176,7 +176,7 @@ impl SeexUi {
                         .child(locale::t("Scanned", "总文件数")),
                 )
                 .child(components::count_chip(
-                    summary.cleaned_count,
+                    summary.cleaned_logos_count,
                     theme::success(),
                 ))
                 .child(
@@ -186,13 +186,23 @@ impl SeexUi {
                         .child(locale::t("Logos Removed", "去标成功")),
                 )
                 .child(components::count_chip(
-                    summary.not_found_count,
+                    summary.cleaned_files_count,
                     theme::primary(),
                 ))
                 .child(
                     div()
                         .text_size(px(SMALL))
                         .text_color(theme::primary())
+                        .child(locale::t("Files Modified", "修改文件")),
+                )
+                .child(components::count_chip(
+                    summary.not_found_count,
+                    theme::muted(),
+                ))
+                .child(
+                    div()
+                        .text_size(px(SMALL))
+                        .text_color(theme::muted())
                         .child(locale::t("Clean / No Logo", "无标/未改")),
                 )
                 .child(components::count_chip(summary.kept_count, theme::muted()))
