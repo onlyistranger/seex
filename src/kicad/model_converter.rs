@@ -1,4 +1,7 @@
-use super::converter::{make_suffixed_model_name, restore_step_model_name};
+use super::converter::{
+    make_package_suffixed_name, make_suffixed_model_name, resolve_package_name,
+    restore_step_model_name,
+};
 use crate::easyeda::{ComponentData, EasyedaApi};
 use crate::error::Result;
 use crate::kicad::{KicadExportOptions, LibraryManager};
@@ -78,9 +81,32 @@ pub async fn convert_3d_model(
     let step_path = lib_manager.get_step_path(&model_name);
     let clean_step_path = lib_manager.get_step_path(&clean_model_name);
 
-    let need_step = args.force
+    let pkg_name = if args.preserve_package {
+        resolve_package_name(component_data, args.replace_dot)
+    } else {
+        None
+    };
+
+    let pkg_suffixed_name = pkg_name
+        .as_ref()
+        .map(|pkg| make_package_suffixed_name(pkg, lcsc_id, args.replace_dot));
+
+    let mut need_step = args.force
         || (args.add_suffix && !step_path.exists())
         || !clean_step_path.exists();
+
+    if let Some(pkg) = &pkg_name {
+        if !lib_manager.get_step_path(pkg).exists() {
+            need_step = true;
+        }
+    }
+    if args.add_suffix {
+        if let Some(pkg_suffixed) = &pkg_suffixed_name {
+            if !lib_manager.get_step_path(pkg_suffixed).exists() {
+                need_step = true;
+            }
+        }
+    }
 
     if !need_step {
         log::debug!(
@@ -110,6 +136,23 @@ pub async fn convert_3d_model(
                 lib_manager.write_step_model(&clean_model_name, &step_data)?;
                 log::debug!("Wrote clean STEP model: {}", clean_model_name);
             }
+
+            // Write package STEP model if preserve_package is enabled
+            if let Some(pkg) = &pkg_name {
+                if args.add_suffix {
+                    if let Some(pkg_suffixed) = &pkg_suffixed_name {
+                        if args.force || !lib_manager.get_step_path(pkg_suffixed).exists() {
+                            lib_manager.write_step_model(pkg_suffixed, &step_data)?;
+                            log::debug!("Wrote package suffixed STEP model: {}", pkg_suffixed);
+                        }
+                    }
+                }
+                if args.force || !lib_manager.get_step_path(pkg).exists() {
+                    lib_manager.write_step_model(pkg, &step_data)?;
+                    log::debug!("Wrote package clean STEP model: {}", pkg);
+                }
+            }
+
             Ok(ModelExportStatus::Written)
         }
         Err(e) => Err(e),
@@ -118,7 +161,7 @@ pub async fn convert_3d_model(
 
 
 fn decrement(counter: &AtomicUsize) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         Some(value.saturating_sub(1))
     });
 }

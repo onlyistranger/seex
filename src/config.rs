@@ -76,6 +76,8 @@ pub struct ExportConfig {
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
+    #[serde(default)]
+    pub preserve_package: bool,
 }
 
 impl Default for ExportConfig {
@@ -100,6 +102,7 @@ impl Default for ExportConfig {
             download_pdf: true,
             add_suffix: true,
             replace_dot: false,
+            preserve_package: false,
         }
     }
 }

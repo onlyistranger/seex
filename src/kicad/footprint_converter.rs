@@ -4,8 +4,8 @@ use crate::easyeda::{ComponentData, FootprintImporter};
 use crate::error::Result;
 use crate::kicad;
 use crate::kicad::converter::{
-    Converter, angle_to_ki, make_suffixed_model_name, make_suffixed_name, restore_footprint_name,
-    restore_step_model_name,
+    Converter, angle_to_ki, make_package_suffixed_name, make_suffixed_model_name,
+    make_suffixed_name, resolve_package_name, restore_footprint_name, restore_step_model_name,
 };
 use crate::kicad::{FileWriteStatus, KicadExportOptions, LibraryManager};
 
@@ -128,6 +128,151 @@ pub fn convert_footprint(
             FileWriteStatus::Written => log::debug!("Wrote clean footprint: {}", ki_footprint.name),
             FileWriteStatus::Skipped => {
                 log::debug!("Skipped existing clean footprint: {}", ki_footprint.name)
+            }
+        }
+    }
+
+    if args.preserve_package {
+        if let Some(pkg_name) = resolve_package_name(component_data, args.replace_dot) {
+            if args.add_suffix {
+                // Export suffixed package footprint
+                let pkg_suffixed_name =
+                    make_package_suffixed_name(&pkg_name, lcsc_id, args.replace_dot);
+                if pkg_suffixed_name != suffixed_fp_name {
+                    let mut pkg_footprint = ki_footprint.clone();
+                    pkg_footprint.name = pkg_suffixed_name.clone();
+
+                    if let Some(model_info) = &component_data.model_3d
+                        && args.targets_model_3d()
+                    {
+                        let model_lib_name = lib_manager.model_lib_name();
+                        let model_dir_name = lib_manager.model_dir_name();
+                        let model_path = format!(
+                            "${{{}}}/{}/{}.step",
+                            model_lib_name, model_dir_name, pkg_suffixed_name
+                        );
+
+                        pkg_footprint.model_3d = Some(kicad::Ki3dModel {
+                            path: model_path,
+                            offset: (0.0, 0.0, 0.0),
+                            scale: (1.0, 1.0, 1.0),
+                            rotate: (
+                                0.0,
+                                0.0,
+                                crate::util::model_rotation_z(model_info.rotation_z),
+                            ),
+                        });
+                    }
+
+                    let footprint_data = exporter.export(&pkg_footprint)?;
+                    let (_, status) = lib_manager.write_footprint_if_needed(
+                        &pkg_footprint.name,
+                        &footprint_data,
+                        args.force,
+                    )?;
+                    match status {
+                        FileWriteStatus::Written => {
+                            log::debug!("Wrote package footprint: {}", pkg_footprint.name)
+                        }
+                        FileWriteStatus::Skipped => {
+                            log::debug!("Skipped existing package footprint: {}", pkg_footprint.name)
+                        }
+                    }
+                }
+
+                // Also export clean non-suffixed package footprint
+                if pkg_name != clean_fp_name {
+                    let mut clean_pkg_footprint = ki_footprint.clone();
+                    clean_pkg_footprint.name = pkg_name.clone();
+
+                    if let Some(model_info) = &component_data.model_3d
+                        && args.targets_model_3d()
+                    {
+                        let model_lib_name = lib_manager.model_lib_name();
+                        let model_dir_name = lib_manager.model_dir_name();
+                        let model_path = format!(
+                            "${{{}}}/{}/{}.step",
+                            model_lib_name, model_dir_name, pkg_name
+                        );
+
+                        clean_pkg_footprint.model_3d = Some(kicad::Ki3dModel {
+                            path: model_path,
+                            offset: (0.0, 0.0, 0.0),
+                            scale: (1.0, 1.0, 1.0),
+                            rotate: (
+                                0.0,
+                                0.0,
+                                crate::util::model_rotation_z(model_info.rotation_z),
+                            ),
+                        });
+                    }
+
+                    let clean_footprint_data = exporter.export(&clean_pkg_footprint)?;
+                    let (_, clean_status) = lib_manager.write_footprint_if_needed(
+                        &clean_pkg_footprint.name,
+                        &clean_footprint_data,
+                        args.force,
+                    )?;
+
+                    match clean_status {
+                        FileWriteStatus::Written => {
+                            log::debug!("Wrote clean package footprint: {}", clean_pkg_footprint.name)
+                        }
+                        FileWriteStatus::Skipped => {
+                            log::debug!(
+                                "Skipped existing clean package footprint: {}",
+                                clean_pkg_footprint.name
+                            )
+                        }
+                    }
+                }
+            } else {
+                // Export ONLY clean package footprint
+                if pkg_name != clean_fp_name {
+                    let mut clean_pkg_footprint = ki_footprint.clone();
+                    clean_pkg_footprint.name = pkg_name.clone();
+
+                    if let Some(model_info) = &component_data.model_3d
+                        && args.targets_model_3d()
+                    {
+                        let model_lib_name = lib_manager.model_lib_name();
+                        let model_dir_name = lib_manager.model_dir_name();
+                        let model_path = format!(
+                            "${{{}}}/{}/{}.step",
+                            model_lib_name, model_dir_name, pkg_name
+                        );
+
+                        clean_pkg_footprint.model_3d = Some(kicad::Ki3dModel {
+                            path: model_path,
+                            offset: (0.0, 0.0, 0.0),
+                            scale: (1.0, 1.0, 1.0),
+                            rotate: (
+                                0.0,
+                                0.0,
+                                crate::util::model_rotation_z(model_info.rotation_z),
+                            ),
+                        });
+                    }
+
+                    let footprint_data = exporter.export(&clean_pkg_footprint)?;
+                    let (_, status) = lib_manager.write_footprint_if_needed(
+                        &clean_pkg_footprint.name,
+                        &footprint_data,
+                        args.force,
+                    )?;
+
+                    match status {
+                        FileWriteStatus::Written => {
+                            log::debug!("Wrote clean package footprint: {}", clean_pkg_footprint.name)
+                        }
+                        FileWriteStatus::Skipped => {
+                            log::debug!(
+                                "Skipped existing clean package footprint: {}",
+                                clean_pkg_footprint.name
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -882,6 +1027,7 @@ mod tests {
             datasheet: "".to_string(),
             jlc_id: "".to_string(),
             package: String::new(),
+            supplier_footprint: None,
         };
 
         convert_footprint(&options, &component_data, &lib_manager, "C431092").unwrap();
@@ -948,6 +1094,7 @@ mod tests {
             datasheet: "".to_string(),
             jlc_id: "".to_string(),
             package: String::new(),
+            supplier_footprint: None,
         };
 
         convert_footprint(&options, &component_data, &lib_manager, "C431092").unwrap();
@@ -961,6 +1108,112 @@ mod tests {
         let clean_content = fs::read_to_string(&clean_fp).unwrap();
         assert!(clean_content.contains(r#"(footprint "XT30PW-M""#), "Header should have clean name");
         assert!(clean_content.contains("CONN-TH_XT30PW-M.step"), "Model path should reference clean step name");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_convert_footprint_with_preserve_package() {
+        use std::fs;
+        let temp_dir = std::env::temp_dir().join(format!("test_fp_pkg_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let lib_manager = LibraryManager::new(&temp_dir);
+        lib_manager.create_directories().unwrap();
+
+        // 1. preserve_package: true, add_suffix: false
+        let options_no_suffix = KicadExportOptions {
+            symbol: false,
+            footprint: true,
+            model_3d: true,
+            full: false,
+            force: true,
+            kicad_version: KicadVersion::V6,
+            download_pdf: false,
+            add_suffix: false,
+            replace_dot: false,
+            preserve_package: true,
+            ..Default::default()
+        };
+
+        let comp_c6186 = ComponentData {
+            lcsc_id: "C6186".to_string(),
+            title: "AMS1117-3.3".to_string(),
+            designator: "U?".to_string(),
+            description: "LDO Regulator".to_string(),
+            data_str: Vec::new(),
+            bbox_x: 0.0,
+            bbox_y: 0.0,
+            symbol_parts: Vec::new(),
+            package_detail: vec![
+                "PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string(),
+            ],
+            package_bbox_x: 0.0,
+            package_bbox_y: 0.0,
+            model_3d: Some(crate::easyeda::Model3dInfo {
+                uuid: "dummy-uuid".to_string(),
+                title: "SOT-223-4P_L6.5-W3.5-H1.6-LS7.0-P2.30".to_string(),
+                rotation_z: 0.0,
+                placement: None,
+            }),
+            manufacturer: "".to_string(),
+            datasheet: "".to_string(),
+            jlc_id: "".to_string(),
+            package: "SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR".to_string(),
+            supplier_footprint: Some("SOT-223".to_string()),
+        };
+
+        convert_footprint(&options_no_suffix, &comp_c6186, &lib_manager, "C6186").unwrap();
+        assert!(lib_manager.get_footprint_path("AMS1117-3.3").exists(), "Clean title footprint should exist");
+        assert!(lib_manager.get_footprint_path("SOT-223").exists(), "Clean package footprint SOT-223 should exist");
+        assert!(!lib_manager.get_footprint_path("SOT-223_C6186").exists());
+        let sot223_mod = fs::read_to_string(lib_manager.get_footprint_path("SOT-223")).unwrap();
+        assert!(sot223_mod.contains("SOT-223.step"), "SOT-223.kicad_mod should reference SOT-223.step");
+
+        // 2. preserve_package: true, add_suffix: true, replace_dot: false
+        let options_suffix = KicadExportOptions {
+            symbol: false,
+            footprint: true,
+            model_3d: true,
+            full: false,
+            force: true,
+            kicad_version: KicadVersion::V6,
+            download_pdf: false,
+            add_suffix: true,
+            replace_dot: false,
+            preserve_package: true,
+            ..Default::default()
+        };
+
+        convert_footprint(&options_suffix, &comp_c6186, &lib_manager, "C6186").unwrap();
+        assert!(lib_manager.get_footprint_path("AMS1117-3.3_C6186").exists());
+        assert!(lib_manager.get_footprint_path("AMS1117-3.3").exists());
+        assert!(lib_manager.get_footprint_path("SOT-223_C6186").exists(), "Suffixed package footprint SOT-223_C6186 should exist");
+        assert!(lib_manager.get_footprint_path("SOT-223").exists(), "Clean package footprint SOT-223 should exist");
+        let sot223_suf_mod = fs::read_to_string(lib_manager.get_footprint_path("SOT-223_C6186")).unwrap();
+        assert!(sot223_suf_mod.contains("SOT-223_C6186.step"), "SOT-223_C6186.kicad_mod should reference SOT-223_C6186.step");
+
+        // 3. preserve_package: true, add_suffix: true, replace_dot: true
+        let options_replace = KicadExportOptions {
+            symbol: false,
+            footprint: true,
+            model_3d: true,
+            full: false,
+            force: true,
+            kicad_version: KicadVersion::V6,
+            download_pdf: false,
+            add_suffix: true,
+            replace_dot: true,
+            preserve_package: true,
+            ..Default::default()
+        };
+
+        convert_footprint(&options_replace, &comp_c6186, &lib_manager, "C6186").unwrap();
+        assert!(lib_manager.get_footprint_path("AMS1117-3_3_C6186").exists());
+        assert!(lib_manager.get_footprint_path("AMS1117-3_3").exists());
+        assert!(lib_manager.get_footprint_path("SOT-223.C6186").exists(), "Suffixed package footprint SOT-223.C6186 should exist when replace_dot is true");
+        assert!(lib_manager.get_footprint_path("SOT-223").exists(), "Clean package footprint SOT-223 should exist");
+        let sot223_rep_mod = fs::read_to_string(lib_manager.get_footprint_path("SOT-223.C6186")).unwrap();
+        assert!(sot223_rep_mod.contains("SOT-223.C6186.step"), "SOT-223.C6186.kicad_mod should reference SOT-223.C6186.step");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

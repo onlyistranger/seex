@@ -409,6 +409,7 @@ impl EasyedaApi {
             datasheet,
             jlc_id,
             package,
+            supplier_footprint: None,
         })
     }
 

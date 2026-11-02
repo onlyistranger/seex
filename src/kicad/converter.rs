@@ -1,4 +1,5 @@
 use crate::cli::KicadVersion;
+use crate::easyeda::ComponentData;
 use crate::error::{ConversionError, Result};
 
 pub struct Converter {
@@ -238,6 +239,79 @@ pub fn make_suffixed_model_name(title: &str, lcsc_id: &str, replace_dot: bool) -
     format!("{}_{}", clean, lcsc_id)
 }
 
+/// Extract base package identifier from complex EasyEDA/raw package strings.
+/// E.g. "SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR" -> "SOT-223"
+/// "SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR" -> "SOT-23"
+/// "TO-252-2_L6.5-W5.3-P2.30-LS9.7-BR" -> "TO-252"
+/// "R0805" -> "0805"
+pub fn extract_package_base(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    // If it's like "SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR", split before dimension specs like "_L", "_W", "_D"
+    let re_dim = regex::Regex::new(r"_(?:[LWDH]|LS|EP|BR|BL)\d").unwrap();
+    let prefix = if let Some(mat) = re_dim.find(trimmed) {
+        &trimmed[..mat.start()]
+    } else if let Some(idx) = trimmed.find('_') {
+        &trimmed[..idx]
+    } else {
+        trimmed
+    };
+
+    // Strip trailing pin count for SOT and TO packages: e.g. SOT-223-3 -> SOT-223, SOT-23-5 -> SOT-23, TO-252-2 -> TO-252
+    let re_sot_to = regex::Regex::new(r"^(SOT-\d+|TO-\d+)(?:-\d+)+$").unwrap();
+    if let Some(caps) = re_sot_to.captures(prefix) {
+        return caps.get(1).unwrap().as_str().to_string();
+    }
+
+    prefix.to_string()
+}
+
+/// Resolve the clean base package name from ComponentData.
+/// Prefers `supplier_footprint` (the page product package, e.g. "SOT-223") if present;
+/// otherwise extracts base from `component_data.package`.
+/// For chip packages (R0805, C0805, 0603, 0402, etc.), preserves the R or C indicator
+/// from the EasyEDA footprint package so resistor and capacitor footprints remain differentiated.
+pub fn resolve_package_name(component_data: &ComponentData, replace_dot: bool) -> Option<String> {
+    let pkg_from_easyeda = extract_package_base(&component_data.package);
+    let re_chip = regex::Regex::new(r"^[RCL]\d{4}$").unwrap();
+
+    let base = if re_chip.is_match(&pkg_from_easyeda) {
+        // Keep R/C/L identifier for chip components (e.g. R0805 vs C0805)
+        pkg_from_easyeda
+    } else if let Some(sf) = component_data
+        .supplier_footprint
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        extract_package_base(sf)
+    } else if !component_data.package.trim().is_empty() {
+        pkg_from_easyeda
+    } else {
+        return None;
+    };
+
+    let sanitized = sanitize_name(&base, replace_dot);
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
+/// Helper to generate package suffixed footprint name.
+/// When `replace_dot` is false, uses `_` delimiter (e.g. `SOT-223_C6186`).
+/// When `replace_dot` is true, uses `.` delimiter (e.g. `SOT-223.C6186`).
+pub fn make_package_suffixed_name(package_base: &str, lcsc_id: &str, replace_dot: bool) -> String {
+    let clean = restore_footprint_name(package_base, replace_dot);
+    if replace_dot {
+        format!("{}.{}", clean, lcsc_id)
+    } else {
+        format!("{}_{}", clean, lcsc_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +347,53 @@ mod tests {
         assert_eq!(restore_footprint_name("C0603_L1_6-W0_8-H0_8_C1653", false), "C0603_L1.6-W0.8-H0.8");
         assert_eq!(make_suffixed_name("XT30PW-M", "C431092", false), "XT30PW-M_C431092");
         assert_eq!(make_suffixed_name("XT30PW-M_C431092", "C431092", false), "XT30PW-M_C431092");
+    }
+
+    #[test]
+    fn test_package_naming_rules() {
+        // C6186 package SOT-223
+        assert_eq!(extract_package_base("SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR"), "SOT-223");
+        assert_eq!(extract_package_base("SOT-223"), "SOT-223");
+        assert_eq!(extract_package_base("SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR"), "SOT-23");
+        assert_eq!(extract_package_base("TO-252-2_L6.5-W5.3-P2.30-LS9.7-BR"), "TO-252");
+        assert_eq!(extract_package_base("SOD-123_L2.8-W1.8-LS3.7-RD"), "SOD-123");
+        assert_eq!(extract_package_base("SOP-8_L4.9-W3.9-P1.27-LS6.0-BL"), "SOP-8");
+        // Chip components preserve R / C identifier
+        assert_eq!(extract_package_base("R0805"), "R0805");
+        assert_eq!(extract_package_base("C0805"), "C0805");
+        assert_eq!(extract_package_base("R0603_L1.6-W0.8"), "R0603");
+        assert_eq!(extract_package_base("C0402_L1.0-W0.5"), "C0402");
+
+        // Base filename (未开后缀)
+        assert_eq!(restore_footprint_name("SOT-223", false), "SOT-223");
+        // 开启后缀后为 SOT-223_C6186
+        assert_eq!(make_package_suffixed_name("SOT-223", "C6186", false), "SOT-223_C6186");
+        // 开启替换后为 SOT-223.C6186
+        assert_eq!(make_package_suffixed_name("SOT-223", "C6186", true), "SOT-223.C6186");
+
+        // R0805 with supplier_footprint as bare "0805" preserves R0805
+        let res_comp = ComponentData {
+            lcsc_id: "C3013955".to_string(),
+            title: "AR05BTBW6200".to_string(),
+            designator: "R?".to_string(),
+            description: "Resistor".to_string(),
+            data_str: Vec::new(),
+            bbox_x: 0.0,
+            bbox_y: 0.0,
+            symbol_parts: Vec::new(),
+            package_detail: Vec::new(),
+            package_bbox_x: 0.0,
+            package_bbox_y: 0.0,
+            model_3d: None,
+            manufacturer: "".to_string(),
+            datasheet: "".to_string(),
+            jlc_id: "".to_string(),
+            package: "R0805".to_string(),
+            supplier_footprint: Some("0805".to_string()),
+        };
+        assert_eq!(resolve_package_name(&res_comp, false).as_deref(), Some("R0805"));
+        assert_eq!(make_package_suffixed_name("R0805", "C3013955", false), "R0805_C3013955");
+        assert_eq!(make_package_suffixed_name("R0805", "C3013955", true), "R0805.C3013955");
     }
 
     #[test]

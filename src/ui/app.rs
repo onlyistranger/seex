@@ -1457,6 +1457,7 @@ pub fn apply_config_to_state(config: &AppConfig, state: &mut MonitorState) {
     state.set_export_download_pdf(config.export.download_pdf);
     state.set_export_add_suffix(config.export.add_suffix);
     state.set_export_replace_dot(config.export.replace_dot);
+    state.set_export_preserve_package(config.export.preserve_package);
     state.set_matched_save_path(config.monitor.matched_save_path.clone());
     state.set_bom_language(config.monitor.bom_language.clone());
 }
@@ -1491,6 +1492,7 @@ pub fn snapshot_config(
             download_pdf: state.export_download_pdf,
             add_suffix: state.export_add_suffix,
             replace_dot: state.export_replace_dot,
+            preserve_package: state.export_preserve_package,
         },
         monitor: MonitorConfig {
             matched_save_path: state.matched_save_path.clone(),

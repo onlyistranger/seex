@@ -66,6 +66,7 @@ pub struct MonitorState {
     pub export_download_pdf: bool,
     pub export_add_suffix: bool,
     pub export_replace_dot: bool,
+    pub export_preserve_package: bool,
     pub matched_save_path: String,
     pub bom_language: String,
     pub bom_running: bool,
@@ -101,6 +102,7 @@ impl MonitorState {
             export_download_pdf: true,
             export_add_suffix: true,
             export_replace_dot: false,
+            export_preserve_package: false,
             matched_save_path: default_save_path("matched.csv"),
             bom_language: "chinese".to_string(),
             bom_running: false,
@@ -353,6 +355,10 @@ impl MonitorState {
 
     pub fn set_export_replace_dot(&mut self, replace_dot: bool) {
         self.export_replace_dot = replace_dot;
+    }
+
+    pub fn set_export_preserve_package(&mut self, preserve_package: bool) {
+        self.export_preserve_package = preserve_package;
     }
 
     pub fn set_matched_save_path(&mut self, path: String) {

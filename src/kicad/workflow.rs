@@ -498,6 +498,38 @@ pub(crate) async fn apply_requested_metadata(
     };
     let metadata = ResolvedMetadata::from_component_data(component_data, product.as_ref());
     metadata.apply_to_component_data(component_data);
+
+    if component_data.supplier_footprint.is_none() {
+        if let Some(product) = &product {
+            if let Some(pkg_prop) = product
+                .properties
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case("Package"))
+            {
+                if !pkg_prop.value.trim().is_empty() {
+                    component_data.supplier_footprint = Some(pkg_prop.value.trim().to_string());
+                }
+            }
+        }
+    }
+
+    if component_data.supplier_footprint.is_none() && !component_data.lcsc_id.trim().is_empty() {
+        let lceda = crate::lceda::LcedaClient::new();
+        if let Ok(items) = lceda.search_components(&component_data.lcsc_id).await {
+            if let Some(item) = items.first() {
+                if let Some(sf) = item
+                    .raw
+                    .get("attributes")
+                    .and_then(|a| a.get("Supplier Footprint"))
+                    .and_then(|v| v.as_str())
+                {
+                    if !sf.trim().is_empty() {
+                        component_data.supplier_footprint = Some(sf.trim().to_string());
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn validate_batch_options(options: &KicadBatchOptions) -> Result<()> {
@@ -887,6 +919,7 @@ mod tests {
             datasheet: "https://source.test/ds".to_string(),
             jlc_id: String::new(),
             package: String::new(),
+            supplier_footprint: None,
         };
 
         let metadata = ResolvedMetadata::from_component_data(&component_data, None);
@@ -1071,6 +1104,68 @@ mod tests {
                 .collect();
             assert!(!entries.iter().any(|name| name.contains("_C77978")), "No suffixed 3D model should exist");
         }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn test_export_kicad_batch_with_preserve_package() {
+        let root = std::env::temp_dir().join(format!("test_kicad_batch_pkg_{}", std::process::id()));
+        let options = KicadBatchOptions {
+            ids: vec!["C6186".to_string()], // AMS1117-3.3 in SOT-223
+            library: KicadLibraryOptions {
+                output: root.clone(),
+                library_name: Some("test_lib_pkg".to_string()),
+                symbol_lib: None,
+                footprint_lib: None,
+                model_lib: None,
+                doc_lib: None,
+            },
+            export: KicadExportOptions {
+                symbol: false,
+                footprint: true,
+                model_3d: true,
+                full: false,
+                force: true,
+                kicad_version: KicadVersion::V6,
+                download_pdf: false,
+                add_suffix: true,
+                replace_dot: false,
+                preserve_package: true,
+                ..Default::default()
+            },
+            english_metadata: false,
+            parallel: 1,
+            continue_on_error: false,
+            append: false,
+            progress: None,
+        };
+
+        let summary = export_kicad_batch(options).await.unwrap();
+        assert_eq!(summary.success, 1);
+
+        let fp_dir = root.join("test_lib_pkg.pretty");
+        assert!(fp_dir.is_dir());
+        let entries: Vec<_> = fs::read_dir(&fp_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+
+        // Must have package footprint files: SOT-223_C6186 and SOT-223
+        assert!(entries.contains(&"SOT-223_C6186.kicad_mod".to_string()), "Must export SOT-223_C6186.kicad_mod, entries: {:?}", entries);
+        assert!(entries.contains(&"SOT-223.kicad_mod".to_string()), "Must export SOT-223.kicad_mod, entries: {:?}", entries);
+        // Must also have standard title footprint files
+        assert!(entries.contains(&"AMS1117-3.3_C6186.kicad_mod".to_string()));
+        assert!(entries.contains(&"AMS1117-3.3.kicad_mod".to_string()));
+
+        let model_dir = root.join("test_lib_pkg.3dshapes");
+        assert!(model_dir.is_dir());
+        let m_entries: Vec<_> = fs::read_dir(&model_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(m_entries.contains(&"SOT-223_C6186.step".to_string()), "Must export SOT-223_C6186.step, entries: {:?}", m_entries);
+        assert!(m_entries.contains(&"SOT-223.step".to_string()), "Must export SOT-223.step, entries: {:?}", m_entries);
 
         let _ = fs::remove_dir_all(root);
     }

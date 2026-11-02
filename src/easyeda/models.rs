@@ -21,6 +21,9 @@ pub struct ComponentData {
     /// EasyEDA package name (`c_para.package`), e.g. `SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR`.
     #[serde(default)]
     pub package: String,
+    /// Supplier / product page package (`Supplier Footprint` from LCSC/LCEDA), e.g. `SOT-223`.
+    #[serde(default)]
+    pub supplier_footprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

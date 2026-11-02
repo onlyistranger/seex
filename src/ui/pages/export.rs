@@ -384,6 +384,7 @@ impl SeexUi {
                 download_pdf: state.export_download_pdf,
                 add_suffix: state.export_add_suffix,
                 replace_dot: state.export_replace_dot,
+                preserve_package: state.export_preserve_package,
             }
         };
         crate::exporter::spawn_export(std::sync::Arc::clone(&self.state), request);
@@ -402,6 +403,7 @@ impl SeexUi {
             download_pdf,
             add_suffix,
             replace_dot,
+            preserve_package,
         ) = self
             .state
             .lock()
@@ -422,6 +424,7 @@ impl SeexUi {
                     state.export_download_pdf,
                     state.export_add_suffix,
                     state.export_replace_dot,
+                    state.export_preserve_package,
                 )
             })
             .unwrap_or_default();
@@ -745,6 +748,27 @@ impl SeexUi {
                 locale::t(
                     "Replace .: replace dot with underscore in footprint and model names",
                     "替换小数点：将封装和模型名中的点替换为下划线",
+                ),
+                HintArea::ExportToggles,
+                cx,
+            ))
+            .child(components::hint(
+                components::selectable(
+                    "toggle-preserve-package",
+                    locale::t("Preserve Package", "封装保留"),
+                    preserve_package,
+                    cx.listener(|this, _event: &ClickEvent, _window, cx| {
+                        if let Ok(mut state) = this.state.lock() {
+                            let next = !state.export_preserve_package;
+                            state.set_export_preserve_package(next);
+                        }
+                        this.mark_config_dirty();
+                        cx.notify();
+                    }),
+                ),
+                locale::t(
+                    "Preserve Package: export additional footprint based on product package (e.g. SOT-223)",
+                    "封装保留：以页面商品封装为基底额外导出封装文件（如 SOT-223）",
                 ),
                 HintArea::ExportToggles,
                 cx,

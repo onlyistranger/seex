@@ -17,6 +17,7 @@ pub struct KicadExportOptions {
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
+    pub preserve_package: bool,
 }
 
 impl Default for KicadExportOptions {
@@ -32,6 +33,7 @@ impl Default for KicadExportOptions {
             download_pdf: true,
             add_suffix: true,
             replace_dot: false,
+            preserve_package: false,
         }
     }
 }

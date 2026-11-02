@@ -41,6 +41,7 @@ pub struct ExportRequest {
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
+    pub preserve_package: bool,
 }
 
 pub fn spawn_export(state: Arc<Mutex<MonitorState>>, req: ExportRequest) {
@@ -331,6 +332,7 @@ fn build_kicad_batch_options(
             download_pdf: req.download_pdf,
             add_suffix: req.add_suffix,
             replace_dot: req.replace_dot,
+            preserve_package: req.preserve_package,
         },
         english_metadata: req.lcsc_english,
         parallel: req.parallel.max(1),
@@ -533,13 +535,14 @@ fn format_kicad_summary(
     ));
 
     lines.push(format!(
-        "Continue on error: {} | LCSC English: {} | Force: {} | Download PDF: {} | Part suffix: {} | Replace dot: {}",
+        "Continue on error: {} | LCSC English: {} | Force: {} | Download PDF: {} | Part suffix: {} | Replace dot: {} | Preserve pkg: {}",
         yes_no(req.continue_on_error),
         yes_no(req.lcsc_english),
         yes_no(req.force),
         yes_no(req.download_pdf),
         yes_no(req.add_suffix),
         yes_no(req.replace_dot),
+        yes_no(req.preserve_package),
     ));
 
     lines.push(format!("Library name: {}", resolve_library_name(req)));

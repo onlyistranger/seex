@@ -524,6 +524,7 @@ mod tests {
             datasheet: "https://source.test/ds".to_string(),
             jlc_id: String::new(),
             package: String::new(),
+            supplier_footprint: None,
         }
     }
 }

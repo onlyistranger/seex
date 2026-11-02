@@ -688,6 +688,7 @@ mod tests {
             datasheet: String::new(),
             jlc_id: String::new(),
             package: String::new(),
+            supplier_footprint: None,
         }
     }
 }
