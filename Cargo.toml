@@ -13,8 +13,6 @@ panic = "abort"
 strip = "symbols"
 incremental = false
 
-[profile.release.package.gpui-pre-windows]
-debug-assertions = true
 
 [dependencies]
 arboard = "3.7.0"
