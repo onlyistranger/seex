@@ -78,6 +78,57 @@ impl SeexUi {
                 }),
             ));
 
+        let mode_row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(12.0))
+            .child(components::fixed_label(locale::t(
+                "Cleaning Mode:",
+                "清理模式:",
+            )))
+            .child(components::selectable(
+                "clean-mode-logo-only",
+                locale::t("EasyEDA Logo Only", "仅立创 Logo"),
+                !self.step_clean_all_markings,
+                cx.listener(|this, _event: &ClickEvent, _window, cx| {
+                    if !this.step_clean_running {
+                        this.step_clean_all_markings = false;
+                        cx.notify();
+                    }
+                }),
+            ))
+            .child(components::selectable(
+                "clean-mode-all-markings",
+                locale::t(
+                    "All Markings (Pin 1 Protected)",
+                    "所有文字与丝印 (保护极性点)",
+                ),
+                self.step_clean_all_markings,
+                cx.listener(|this, _event: &ClickEvent, _window, cx| {
+                    if !this.step_clean_running {
+                        this.step_clean_all_markings = true;
+                        cx.notify();
+                    }
+                }),
+            ))
+            .child(
+                div()
+                    .text_size(px(SMALL))
+                    .text_color(theme::muted())
+                    .child(if self.step_clean_all_markings {
+                        locale::t(
+                            "Removes IC text, SOT markings and logos; preserves Pin 1 polarity dot.",
+                            "去除芯片文字、SOT丝印与Logo；保护并保留 Pin 1 极性圆点。",
+                        )
+                    } else {
+                        locale::t(
+                            "Only removes EasyEDA / LCEDA vendor 3D logo geometries.",
+                            "仅检测并移除立创 EasyEDA / LCEDA 官方 3D Logo 几何特征。",
+                        )
+                    }),
+            );
+
         let (curr_progress, total_progress) = self.step_clean_progress;
         let progress_label = if is_running {
             if total_progress > 0 {
@@ -156,6 +207,7 @@ impl SeexUi {
             .child(header)
             .child(input_row)
             .child(output_row)
+            .child(mode_row)
             .child(action_row);
 
         // Summary cards

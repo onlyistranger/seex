@@ -223,6 +223,7 @@ pub struct SeexUi {
     pub mono_family: SharedString,
     pub step_clean_input: String,
     pub step_clean_output: String,
+    pub step_clean_all_markings: bool,
     pub step_clean_running: bool,
     pub step_clean_progress: (usize, usize),
     pub step_clean_logs: Vec<String>,
@@ -516,6 +517,7 @@ impl SeexUi {
             mono_family,
             step_clean_input: String::new(),
             step_clean_output: String::new(),
+            step_clean_all_markings: false,
             step_clean_running: false,
             step_clean_progress: (0, 0),
             step_clean_logs: Vec::new(),
@@ -981,20 +983,27 @@ impl SeexUi {
         let (tx, rx) = mpsc::channel();
         self.step_clean_rx = Some(rx);
 
+        let mode = if self.step_clean_all_markings {
+            crate::step_logo::CleanMode::AllMarkings
+        } else {
+            crate::step_logo::CleanMode::LogoOnly
+        };
+
         std::thread::spawn(move || {
             let options = crate::step_cleaner::CleanStepOptions {
                 input,
                 output,
                 recursive: true,
+                mode,
             };
 
             let summary = crate::step_cleaner::clean_step(&options, |curr, total, item| {
                 let status = match item.outcome {
                     crate::step_logo::LogoOutcome::Removed(rem) => {
-                        format!("✓ 去标成功 (移除 {} 处 Logo, {} 碎片, {} 几何面)", rem.logos, rem.pieces, rem.faces)
+                        format!("✓ 去除成功 (移除 {} 处标记, {} 碎片, {} 几何面)", rem.logos, rem.pieces, rem.faces)
                     }
-                    crate::step_logo::LogoOutcome::NotFound => "○ 无 Logo (原样保存)".to_string(),
-                    crate::step_logo::LogoOutcome::Kept => "⚠ 检测到 Logo 但流形保护保留".to_string(),
+                    crate::step_logo::LogoOutcome::NotFound => "○ 无标记 (原样保存)".to_string(),
+                    crate::step_logo::LogoOutcome::Kept => "⚠ 检测到标记但流形/极点保护保留".to_string(),
                     crate::step_logo::LogoOutcome::Unreadable => "✗ 无法解析的 STEP 模型".to_string(),
                 };
                 let name = item.src_path.file_name().unwrap_or_default().to_string_lossy();

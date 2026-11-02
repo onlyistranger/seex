@@ -91,7 +91,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: KicadCommands,
     },
-    /// Strip EasyEDA / LCEDA 3D logo from STEP file(s) and save to output directory
+    /// Strip EasyEDA / LCEDA 3D logo or all silkscreen markings from STEP file(s) and save to output directory
     #[command(name = "clean-step", alias = "strip-logo")]
     CleanStep {
         /// Input STEP file or directory
@@ -109,6 +109,9 @@ pub enum Commands {
         /// Recursively process subdirectories if input is a directory
         #[arg(short = 'r', long, default_value_t = true)]
         recursive: bool,
+        /// Remove all text, model numbers, and silkscreen markings (with Pin 1 protection) instead of only LCEDA/EasyEDA logos
+        #[arg(short = 'a', long)]
+        all_markings: bool,
     },
 }
 
@@ -286,6 +289,7 @@ pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             pos_input,
             pos_output,
             recursive,
+            all_markings,
         }) => {
             let input = input
                 .or(pos_input)
@@ -293,7 +297,7 @@ pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             let output = output
                 .or(pos_output)
                 .ok_or("Missing output directory. Usage: seex clean-step <INPUT_PATH> <OUTPUT_DIR>")?;
-            run_clean_step(&input, &output, recursive)?;
+            run_clean_step(&input, &output, recursive, all_markings)?;
         }
         Some(_) => {
             println!("This subcommand requires the full GUI or is not yet implemented in headless mode.");
@@ -304,6 +308,7 @@ pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Ready-to-run examples:");
                 println!("  seex clean-step ./input.step ./output_dir");
                 println!("  seex clean-step -i ./step_models -o ./cleaned -r");
+                println!("  seex clean-step -i ./step_models -o ./cleaned -r -a");
             } else {
                 println!("Run 'seex --help' for usage, or run without arguments to launch the GUI.");
             }
@@ -312,26 +317,42 @@ pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_clean_step(input: &std::path::Path, output: &std::path::Path, recursive: bool) -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== SeEx 3D STEP Logo Remover ===");
-    println!("Input:       {}", input.display());
-    println!("Destination: {}", output.display());
-    println!("Recursive:   {}", recursive);
+fn run_clean_step(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    recursive: bool,
+    all_markings: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mode = if all_markings {
+        crate::step_logo::CleanMode::AllMarkings
+    } else {
+        crate::step_logo::CleanMode::LogoOnly
+    };
+
+    println!("=== SeEx 3D STEP Logo & Marking Remover ===");
+    println!("Input:        {}", input.display());
+    println!("Destination:  {}", output.display());
+    println!("Recursive:    {}", recursive);
+    println!("Clean Mode:   {}", match mode {
+        crate::step_logo::CleanMode::LogoOnly => "Logo Only (EasyEDA / LCEDA)",
+        crate::step_logo::CleanMode::AllMarkings => "All Markings & Silkscreen (with Pin 1 retention protection)",
+    });
     println!("---------------------------------");
 
     let options = crate::step_cleaner::CleanStepOptions {
         input: input.to_path_buf(),
         output: output.to_path_buf(),
         recursive,
+        mode,
     };
 
     let summary = crate::step_cleaner::clean_step(&options, |idx, total, item| {
         let status = match item.outcome {
             crate::step_logo::LogoOutcome::Removed(rem) => {
-                format!("REMOVED {} logo(s) ({} pieces, {} faces)", rem.logos, rem.pieces, rem.faces)
+                format!("REMOVED {} marking(s) ({} pieces, {} faces)", rem.logos, rem.pieces, rem.faces)
             }
-            crate::step_logo::LogoOutcome::NotFound => "No logo found".to_string(),
-            crate::step_logo::LogoOutcome::Kept => "Logo detected but kept (safety)".to_string(),
+            crate::step_logo::LogoOutcome::NotFound => "No marking found".to_string(),
+            crate::step_logo::LogoOutcome::Kept => "Marking detected but kept (safety)".to_string(),
             crate::step_logo::LogoOutcome::Unreadable => "Unreadable STEP file".to_string(),
         };
 
@@ -347,9 +368,9 @@ fn run_clean_step(input: &std::path::Path, output: &std::path::Path, recursive: 
     println!("Summary:");
     println!("  Total files scanned:     {}", summary.total_files);
     println!("  Files modified:          {} / {}", summary.cleaned_files_count, summary.total_files);
-    println!("  3D Logos removed:        {} ({} pieces, {} faces)", summary.cleaned_logos_count, summary.cleaned_pieces, summary.cleaned_faces);
-    println!("  Already clean (no logo):  {}", summary.not_found_count);
-    println!("  Kept with logo:          {}", summary.kept_count);
+    println!("  Markings/Logos removed:  {} ({} pieces, {} faces)", summary.cleaned_logos_count, summary.cleaned_pieces, summary.cleaned_faces);
+    println!("  Already clean (no mark): {}", summary.not_found_count);
+    println!("  Kept with marking:       {}", summary.kept_count);
     println!("  Unreadable:              {}", summary.unreadable_count);
     println!("  Errors:                  {}", summary.error_count);
 

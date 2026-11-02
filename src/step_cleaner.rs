@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::step_logo::{LogoOutcome, strip_logo};
+use crate::step_logo::{CleanMode, LogoOutcome, strip_logo_with_mode};
 
 /// Options for cleaning STEP models.
 #[derive(Debug, Clone)]
@@ -18,6 +18,19 @@ pub struct CleanStepOptions {
     pub output: PathBuf,
     /// Whether to recursively search subdirectories when `input` is a folder.
     pub recursive: bool,
+    /// Cleaning mode: LogoOnly (default) or AllMarkings (all text and silkscreen markings, with Pin 1 protection).
+    pub mode: CleanMode,
+}
+
+impl Default for CleanStepOptions {
+    fn default() -> Self {
+        Self {
+            input: PathBuf::new(),
+            output: PathBuf::new(),
+            recursive: true,
+            mode: CleanMode::LogoOnly,
+        }
+    }
 }
 
 /// Processing result for a single STEP file.
@@ -106,7 +119,11 @@ pub fn compute_dest_path(input_base: &Path, src_file: &Path, output_dir: &Path) 
 
 /// Cleans one STEP file in memory and saves the result to `dest_path`.
 /// Returns the outcome and any write error encountered.
-pub fn clean_single_step_file(src_path: &Path, dest_path: &Path) -> (LogoOutcome, Option<String>) {
+pub fn clean_single_step_file(
+    src_path: &Path,
+    dest_path: &Path,
+    mode: CleanMode,
+) -> (LogoOutcome, Option<String>) {
     let data = match fs::read(src_path) {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -117,7 +134,7 @@ pub fn clean_single_step_file(src_path: &Path, dest_path: &Path) -> (LogoOutcome
         }
     };
 
-    let (maybe_cleaned, outcome) = strip_logo(&data);
+    let (maybe_cleaned, outcome) = strip_logo_with_mode(&data, mode);
     let bytes_to_write = match (&maybe_cleaned, outcome) {
         (Some(cleaned), LogoOutcome::Removed(_)) => cleaned.as_slice(),
         _ => data.as_slice(),
@@ -159,7 +176,7 @@ where
 
     for (index, src_path) in files.into_iter().enumerate() {
         let dest_path = compute_dest_path(&options.input, &src_path, &options.output);
-        let (outcome, error) = clean_single_step_file(&src_path, &dest_path);
+        let (outcome, error) = clean_single_step_file(&src_path, &dest_path, options.mode);
 
         match outcome {
             LogoOutcome::Removed(removal) => {
@@ -258,6 +275,7 @@ mod tests {
             input: input_dir.clone(),
             output: output_dir.clone(),
             recursive: true,
+            mode: CleanMode::LogoOnly,
         };
 
         let mut processed = 0;
@@ -304,6 +322,28 @@ mod tests {
         assert_eq!(summary.cleaned_count, 3);
         assert_eq!(summary.cleaned_pieces, 36);
         assert_eq!(summary.cleaned_faces, 84);
+    }
+
+    #[test]
+    fn test_sot223_pin_one_retention() {
+        let path = Path::new(r"D:\Users\murmur\Desktop\board\sot-223-4p.step");
+        if !path.exists() {
+            return;
+        }
+        let data = fs::read(path).unwrap();
+        let (cleaned, outcome) = crate::step_logo::strip_logo_with_mode(&data, CleanMode::AllMarkings);
+        match outcome {
+            LogoOutcome::Removed(rem) => {
+                // SOT-223 has 10 text characters and 1 Pin 1 dot.
+                // Exactly 10 characters are removed, preserving the Pin 1 circular dot!
+                assert_eq!(rem.pieces, 10);
+                let cleaned_bytes = cleaned.expect("cleaned bytes should exist");
+                let cleaned_str = String::from_utf8_lossy(&cleaned_bytes);
+                // Verify the Pin 1 circular cylinder (radius 0.125) is preserved
+                assert!(cleaned_str.contains("0.125"));
+            }
+            other => panic!("Expected Removed outcome, got {:?}", other),
+        }
     }
 }
 

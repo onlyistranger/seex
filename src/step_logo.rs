@@ -88,33 +88,67 @@ impl LogoOutcome {
 /// The model without the EasyEDA logo, and what was done. The new model is only
 /// returned for [`LogoOutcome::Removed`]; in every other case the caller keeps
 /// the original bytes.
+/// Clean mode for STEP model logo / marking stripping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CleanMode {
+    /// Only remove EasyEDA / LCEDA vendor 3D logos (default).
+    #[default]
+    LogoOnly,
+    /// Remove all text, model numbers, and silkscreen markings (with Pin 1 protection).
+    AllMarkings,
+}
+
+/// The model without the EasyEDA logo, and what was done. The new model is only
+/// returned for [`LogoOutcome::Removed`]; in every other case the caller keeps
+/// the original bytes.
 pub fn strip_logo(data: &[u8]) -> (Option<Vec<u8>>, LogoOutcome) {
-    match remove_logo(data) {
+    strip_logo_with_mode(data, CleanMode::LogoOnly)
+}
+
+/// Strips either EasyEDA logos only or all text and silkscreen markings
+/// depending on `mode`, while preserving Pin 1 polarity marks.
+pub fn strip_logo_with_mode(data: &[u8], mode: CleanMode) -> (Option<Vec<u8>>, LogoOutcome) {
+    match remove_logo_with_mode(data, mode) {
         Ok((model, removal)) => (Some(model), LogoOutcome::Removed(removal)),
         Err(outcome) => (None, outcome),
     }
 }
 
-/// The model without the EasyEDA logo; otherwise why it was left as it was.
-fn remove_logo(data: &[u8]) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
+/// The model without the EasyEDA logo / markings; otherwise why it was left as it was.
+fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
     let text: String = data.iter().map(|&byte| byte as char).collect();
     let mut model = Model::parse(&text).ok_or(LogoOutcome::Unreadable)?;
     let geometry = Geometry::new(&model);
     let pieces = geometry.pieces();
-    let (mut selected, mut logos) = select_logo(&pieces);
-    // Some models draw the icon across the edge of the face the words sit on, so
-    // it is not a separate relief: take the words, and colour the icon like the
-    // face under it instead of cutting it out.
-    let mut icon_faces: HashSet<u64> = HashSet::new();
-    if selected.is_empty() {
-        let (words_selected, words_logos) = select_words(&pieces);
-        selected = words_selected;
-        logos = words_logos;
-        if selected.is_empty() {
-            return Err(LogoOutcome::NotFound);
+    let (selected, logos, icon_faces) = match mode {
+        CleanMode::LogoOnly => {
+            let (sel, log) = select_logo(&pieces);
+            let mut icon_faces: HashSet<u64> = HashSet::new();
+            if sel.is_empty() {
+                let (words_selected, words_logos) = select_words(&pieces);
+                if words_selected.is_empty() {
+                    return Err(LogoOutcome::NotFound);
+                }
+                icon_faces = geometry.faces_beside(&pieces, &words_selected);
+                (words_selected, words_logos, icon_faces)
+            } else {
+                (sel, log, icon_faces)
+            }
         }
-        icon_faces = geometry.faces_beside(&pieces, &selected);
-    }
+        CleanMode::AllMarkings => {
+            let (sel, log) = select_all_markings(&pieces, &model);
+            if sel.is_empty() {
+                return Err(LogoOutcome::NotFound);
+            }
+            (sel, log, HashSet::new())
+        }
+    };
+
+    let pin_one_faces: HashSet<u64> = pieces
+        .iter()
+        .filter(|p| is_pin_one_mark(p, &pieces, &model))
+        .flat_map(|p| p.faces.iter().copied())
+        .collect();
     let base_face = selected
         .iter()
         .find_map(|&i| pieces[i].loops.first().map(|&(face, _)| face));
@@ -170,6 +204,7 @@ fn remove_logo(data: &[u8]) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
                 || dead.contains(&face)
                 || bases.contains(&face)
                 || icon_faces.contains(&face)
+                || pin_one_faces.contains(&face)
             {
                 continue;
             }
@@ -658,6 +693,7 @@ struct Piece {
     lo: Point,
     hi: Point,
     shape: (usize, usize),
+    is_circular: bool,
 }
 
 impl<'a> Geometry<'a> {
@@ -684,14 +720,77 @@ impl<'a> Geometry<'a> {
         let mut points = Vec::new();
         for &face in faces {
             for edge in face_edges(self.model, face) {
-                for vertex in self.model.refs(edge).into_iter().take(2) {
-                    if let Some(p) = self.model.refs(vertex).first().and_then(|&p| self.point(p)) {
+                let refs = self.model.refs(edge);
+                for vertex in refs.iter().take(2) {
+                    if let Some(p) = self.model.refs(*vertex).first().and_then(|&p| self.point(p)) {
                         points.push(p);
+                    }
+                }
+                if let Some(&curve) = refs.get(2) {
+                    let kind = self.model.kind(curve);
+                    if kind.starts_with("B_SPLINE") {
+                        for &cp in &self.model.refs(curve) {
+                            if let Some(p) = self.point(cp) {
+                                points.push(p);
+                            }
+                        }
+                    } else if kind == "CIRCLE" {
+                        if let Some(r) = numbers(self.model.body(curve).unwrap_or("")).first().copied() {
+                            if let Some(&placement) = self.model.refs(curve).first() {
+                                let prefs = self.model.refs(placement);
+                                if let Some(origin) = prefs.first().and_then(|&id| self.point(id)) {
+                                    points.push([origin[0] - r, origin[1], origin[2]]);
+                                    points.push([origin[0] + r, origin[1], origin[2]]);
+                                    points.push([origin[0], origin[1] - r, origin[2]]);
+                                    points.push([origin[0], origin[1] + r, origin[2]]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(cyl) = self.cylinder(face) {
+                let r = cyl.radius;
+                let origin = cyl.origin;
+                points.push([origin[0] - r, origin[1], origin[2]]);
+                points.push([origin[0] + r, origin[1], origin[2]]);
+                points.push([origin[0], origin[1] - r, origin[2]]);
+                points.push([origin[0], origin[1] + r, origin[2]]);
+            }
+        }
+        points
+    }
+
+    fn is_faces_circular(&self, faces: &HashSet<u64>) -> bool {
+        for &face in faces {
+            if let Some(surface) = face_surface(self.model, face) {
+                let kind = self.model.kind(surface);
+                if kind == "CYLINDRICAL_SURFACE"
+                    || kind == "CONICAL_SURFACE"
+                    || kind == "SPHERICAL_SURFACE"
+                    || kind == "TOROIDAL_SURFACE"
+                    || kind == "SURFACE_OF_REVOLUTION"
+                {
+                    return true;
+                }
+            }
+            for edge in face_edges(self.model, face) {
+                if let Some(&curve) = self.model.refs(edge).get(2) {
+                    let kind = self.model.kind(curve);
+                    if kind == "CIRCLE" {
+                        return true;
+                    }
+                    if let Some(body) = self.model.body(curve) {
+                        if body.contains("RATIONAL_B_SPLINE_CURVE")
+                            && (body.contains("0.7071") || body.contains(".7071"))
+                        {
+                            return true;
+                        }
                     }
                 }
             }
         }
-        points
+        false
     }
 
     /// Origin and unit normal of a planar face.
@@ -756,6 +855,7 @@ impl<'a> Geometry<'a> {
                 let mut normal = [0.0; 3];
                 normal[axis] = 1.0;
                 let shape = self.shape(&faces, normal);
+                let is_circular = self.is_faces_circular(&faces);
                 solid_faces.extend(faces.iter().copied());
                 pieces.push(Piece {
                     faces,
@@ -768,6 +868,7 @@ impl<'a> Geometry<'a> {
                     lo,
                     hi,
                     shape,
+                    is_circular,
                 });
             }
         }
@@ -832,6 +933,7 @@ impl<'a> Geometry<'a> {
                     _ => continue,
                 };
                 let shape = self.shape_on(&faces, normal, cylinder);
+                let is_circular = self.is_faces_circular(&faces);
                 features.push(Piece {
                     faces,
                     loops: vec![(face, bound)],
@@ -843,6 +945,7 @@ impl<'a> Geometry<'a> {
                     lo,
                     hi,
                     shape,
+                    is_circular,
                 });
             }
         }
@@ -1138,6 +1241,127 @@ fn select_logo(pieces: &[Piece]) -> (Vec<usize>, usize) {
     let mut chosen: Vec<usize> = chosen.into_iter().collect();
     chosen.sort_unstable();
     (chosen, logo_count)
+}
+
+/// Checks if `piece` represents a Pin 1 orientation mark that should be protected.
+/// Pin 1 marks are typically small circular/rounded (or square) indentations or dots
+/// situated near pin 1 on the top package surface, isolated from running text strings.
+fn is_pin_one_mark(piece: &Piece, all_pieces: &[Piece], model: &Model) -> bool {
+    let ex = [
+        piece.hi[0] - piece.lo[0],
+        piece.hi[1] - piece.lo[1],
+        piece.hi[2] - piece.lo[2],
+    ];
+    let depth_axis = (0..3)
+        .min_by(|&a, &b| ex[a].total_cmp(&ex[b]))
+        .unwrap_or(2);
+    let mut in_plane = Vec::new();
+    for a in 0..3 {
+        if a != depth_axis {
+            in_plane.push(ex[a]);
+        }
+    }
+    in_plane.sort_by(f64::total_cmp);
+    let d1 = in_plane[0];
+    let d2 = in_plane[1];
+    let ratio = d2 / d1.max(1e-6);
+    let diameter = (d1 + d2) / 2.0;
+
+    // Pin 1 dot diameter typically between 0.10mm and 3.0mm
+    if diameter < 0.10 || diameter > 3.0 {
+        return false;
+    }
+
+    // Depth check: dimples and silkscreen dots are shallow (depth <= 0.40mm)
+    if piece.depth > 0.40 {
+        return false;
+    }
+
+    // Circularity & aspect ratio
+    if piece.is_circular {
+        if ratio > 1.35 {
+            return false;
+        }
+    } else {
+        // Small square polarity dot (on some QFN packages)
+        let is_small_square = ratio <= 1.15 && diameter <= 1.2 && piece.faces.len() <= 5;
+        if !is_small_square {
+            return false;
+        }
+    }
+
+    // Inner island check:
+    // Pin 1 dots have no inner holes. Letters ('O', '0', '8', 'A', 'B', etc.) have inner loops.
+    for &face in &piece.faces {
+        if face_bounds(model, face).len() > 1 {
+            return false;
+        }
+    }
+
+    // String isolation check:
+    // Running text punctuation (e.g. '.' in "1.8V") has adjacent text characters on both sides.
+    // Pin 1 mark is in package corner / standalone.
+    let close_neighbors = all_pieces
+        .iter()
+        .filter(|&other| {
+            !std::ptr::eq(piece, other)
+                && coplanar(piece, other)
+                && gap(piece, other) <= 1.0 * diameter
+        })
+        .count();
+
+    if close_neighbors >= 2 {
+        return false;
+    }
+
+    true
+}
+
+/// Selects all marking pieces (thin solids and relief engravings/embossings),
+/// excluding protected Pin 1 polarity marks.
+/// Returns the list of piece indices and the count of distinct marking clusters.
+fn select_all_markings(pieces: &[Piece], model: &Model) -> (Vec<usize>, usize) {
+    let candidates: Vec<usize> = (0..pieces.len())
+        .filter(|&i| !is_pin_one_mark(&pieces[i], pieces, model))
+        .collect();
+
+    if candidates.is_empty() {
+        return (Vec::new(), 0);
+    }
+
+    let mut visited: HashSet<usize> = HashSet::new();
+    let mut clusters = 0;
+    for &idx in &candidates {
+        if visited.contains(&idx) {
+            continue;
+        }
+        let mut cluster = vec![idx];
+        let mut q = 0;
+        while q < cluster.len() {
+            let curr = cluster[q];
+            let p_curr = &pieces[curr];
+            let size = (0..3)
+                .map(|a| p_curr.hi[a] - p_curr.lo[a])
+                .fold(0.0, f64::max);
+            let reach = 1.5 * size.max(0.5);
+
+            for &other in &candidates {
+                if !cluster.contains(&other)
+                    && coplanar(p_curr, &pieces[other])
+                    && gap(p_curr, &pieces[other]) <= reach
+                {
+                    cluster.push(other);
+                }
+            }
+            q += 1;
+        }
+        for &c in &cluster {
+            visited.insert(c);
+        }
+        clusters += 1;
+    }
+
+    (candidates, clusters)
 }
 
 /// Whether `piece` has the logo shape `shape` (side faces, curved side faces).
