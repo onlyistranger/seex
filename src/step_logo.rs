@@ -118,37 +118,157 @@ pub fn strip_logo_with_mode(data: &[u8], mode: CleanMode) -> (Option<Vec<u8>>, L
 fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
     let text: String = data.iter().map(|&byte| byte as char).collect();
     let mut model = Model::parse(&text).ok_or(LogoOutcome::Unreadable)?;
-    let geometry = Geometry::new(&model);
-    let pieces = geometry.pieces();
-    let (selected, logos, icon_faces) = match mode {
-        CleanMode::LogoOnly => {
-            let (sel, log) = select_logo(&pieces);
-            let mut icon_faces: HashSet<u64> = HashSet::new();
-            if sel.is_empty() {
-                let (words_selected, words_logos) = select_words(&pieces);
-                if words_selected.is_empty() {
+
+    let (pieces, pin_one_faces, clusters) = {
+        let geometry = Geometry::new(&model);
+        let pieces = geometry.pieces();
+        let pin_one_faces: HashSet<u64> = pieces
+            .iter()
+            .filter(|p| is_pin_one_mark(p, &pieces, &model))
+            .flat_map(|p| p.faces.iter().copied())
+            .collect();
+
+        let clusters = match mode {
+            CleanMode::LogoOnly => {
+                let (sel, log) = select_logo(&pieces);
+                let (selected, logos, icon_faces) = if sel.is_empty() {
+                    let (words_selected, words_logos) = select_words(&pieces);
+                    if words_selected.is_empty() {
+                        return Err(LogoOutcome::NotFound);
+                    }
+                    let icon_faces = geometry.faces_beside(&pieces, &words_selected);
+                    (words_selected, words_logos, icon_faces)
+                } else {
+                    (sel, log, HashSet::new())
+                };
+                vec![(selected, icon_faces, logos)]
+            }
+            CleanMode::AllMarkings => {
+                // 1. Detect EasyEDA vendor logo(s) first
+                let (easyeda_sel, easyeda_logos) = select_logo(&pieces);
+                let (easyeda_sel, easyeda_icon_faces, easyeda_count) = if easyeda_sel.is_empty() {
+                    let (words_sel, words_count) = select_words(&pieces);
+                    let icon_f = if !words_sel.is_empty() {
+                        geometry.faces_beside(&pieces, &words_sel)
+                    } else {
+                        HashSet::new()
+                    };
+                    (words_sel, icon_f, words_count)
+                } else {
+                    (easyeda_sel, HashSet::new(), easyeda_logos)
+                };
+
+                let easyeda_set: HashSet<usize> = easyeda_sel.iter().copied().collect();
+
+                // 2. Detect all other marking clusters
+                let marking_clusters = select_all_markings(&pieces, &model);
+                let other_clusters: Vec<Vec<usize>> = marking_clusters
+                    .into_iter()
+                    .map(|cluster| {
+                        cluster
+                            .into_iter()
+                            .filter(|idx| !easyeda_set.contains(idx))
+                            .collect::<Vec<usize>>()
+                    })
+                    .filter(|cluster| !cluster.is_empty())
+                    .collect();
+
+                let mut clusters: Vec<(Vec<usize>, HashSet<u64>, usize)> = Vec::new();
+                if !easyeda_sel.is_empty() {
+                    clusters.push((easyeda_sel, easyeda_icon_faces, easyeda_count.max(1)));
+                }
+                for cluster in other_clusters {
+                    clusters.push((cluster, HashSet::new(), 1));
+                }
+
+                if clusters.is_empty() {
                     return Err(LogoOutcome::NotFound);
                 }
-                icon_faces = geometry.faces_beside(&pieces, &words_selected);
-                (words_selected, words_logos, icon_faces)
-            } else {
-                (sel, log, icon_faces)
+                clusters
             }
-        }
-        CleanMode::AllMarkings => {
-            let (sel, log) = select_all_markings(&pieces, &model);
-            if sel.is_empty() {
-                return Err(LogoOutcome::NotFound);
-            }
-            (sel, log, HashSet::new())
-        }
+        };
+        (pieces, pin_one_faces, clusters)
     };
 
-    let pin_one_faces: HashSet<u64> = pieces
-        .iter()
-        .filter(|p| is_pin_one_mark(p, &pieces, &model))
-        .flat_map(|p| p.faces.iter().copied())
-        .collect();
+    if mode == CleanMode::LogoOnly {
+        let (selected, icon_faces, logos) = &clusters[0];
+        let removal = apply_cluster_removal(
+            &mut model,
+            &pieces,
+            selected,
+            *logos,
+            icon_faces,
+            &pin_one_faces,
+        )?;
+        let out: Vec<u8> = model.write().chars().map(|c| c as u8).collect();
+        return Ok((out, removal));
+    }
+
+    // CleanMode::AllMarkings:
+    // 3. Fast trial: try removing all clusters combined in one pass on a cloned model
+    let all_selected: Vec<usize> = clusters.iter().flat_map(|(c, _, _)| c.iter().copied()).collect();
+    let all_icons: HashSet<u64> = clusters.iter().flat_map(|(_, icons, _)| icons.iter().copied()).collect();
+    let total_logos: usize = clusters.iter().map(|(_, _, count)| *count).sum();
+
+    let mut fast_trial = model.clone();
+    if let Ok(removal) = apply_cluster_removal(
+        &mut fast_trial,
+        &pieces,
+        &all_selected,
+        total_logos,
+        &all_icons,
+        &pin_one_faces,
+    ) {
+        let out: Vec<u8> = fast_trial.write().chars().map(|c| c as u8).collect();
+        return Ok((out, removal));
+    }
+
+    // 4. Resilient per-cluster fallback for complex multi-component / board-level models:
+    // Process cluster by cluster with individual manifold consistency checks.
+    log::warn!("Bulk marking removal failed manifold check; falling back to resilient per-cluster removal");
+    let mut total_removal = LogoRemoval::default();
+    for (cluster, icon_faces, log_count) in clusters {
+        let mut test_model = model.clone();
+        if let Ok(rem) = apply_cluster_removal(
+            &mut test_model,
+            &pieces,
+            &cluster,
+            log_count,
+            &icon_faces,
+            &pin_one_faces,
+        ) {
+            model = test_model;
+            total_removal.logos += rem.logos;
+            total_removal.pieces += rem.pieces;
+            total_removal.faces += rem.faces;
+        } else {
+            log::debug!("Skipped marking cluster ({} pieces) to preserve manifold topology", cluster.len());
+        }
+    }
+
+    if total_removal.pieces > 0 {
+        let out: Vec<u8> = model.write().chars().map(|c| c as u8).collect();
+        Ok((out, total_removal))
+    } else {
+        Err(LogoOutcome::Kept)
+    }
+}
+
+/// Applies removal of a specific set of marking pieces to `model`.
+/// Returns the removal statistics if successful and consistent, or `Err(LogoOutcome::Kept)`
+/// if the resulting geometry violates manifold solid integrity.
+fn apply_cluster_removal(
+    model: &mut Model,
+    pieces: &[Piece],
+    selected: &[usize],
+    logos: usize,
+    icon_faces: &HashSet<u64>,
+    pin_one_faces: &HashSet<u64>,
+) -> Result<LogoRemoval, LogoOutcome> {
+    if selected.is_empty() {
+        return Ok(LogoRemoval::default());
+    }
+
     let base_face = selected
         .iter()
         .find_map(|&i| pieces[i].loops.first().map(|&(face, _)| face));
@@ -158,7 +278,7 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
         logos: logos.max(1),
         ..Default::default()
     };
-    for &index in &selected {
+    for &index in selected {
         let piece = &pieces[index];
         removal.pieces += 1;
         removal.faces += piece.faces.len();
@@ -169,11 +289,15 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
         }
         loops.extend(piece.loops.iter().copied());
     }
+
+    loops.sort_unstable();
+    loops.dedup();
+
     // Letters that straddle the seam of a split face (round bodies) are part of
     // its outline rather than holes in it, so they cannot be cut out: give what
     // is left inside each logo's area the colour of the face under it.
     let mut groups: Vec<Vec<usize>> = Vec::new();
-    for &index in &selected {
+    for &index in selected {
         match groups
             .iter_mut()
             .find(|g| coplanar(&pieces[g[0]], &pieces[index]))
@@ -197,6 +321,7 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
         }
         let margin = 0.02;
         let bases: HashSet<u64> = loops.iter().map(|&(face, _)| face).collect();
+        let geom = Geometry::new(model);
         let mut leftover: HashSet<u64> = HashSet::new();
         for entity in &model.entities {
             let face = entity.id;
@@ -209,7 +334,7 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
                 continue;
             }
             let one: HashSet<u64> = [face].into_iter().collect();
-            let points = geometry.face_points(&one);
+            let points = geom.face_points(&one);
             let within = !points.is_empty()
                 && points.iter().all(|p| {
                     (0..3).all(|a| p[a] >= lo[a] - margin && p[a] <= hi[a] + margin)
@@ -225,36 +350,39 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
         leftovers.push((leftover, base));
     }
     if let Some(base) = base_face {
-        let recoloured = recolour(&mut model, &icon_faces, base);
+        let recoloured = recolour(model, icon_faces, base);
         if recoloured > 0 {
             removal.pieces += 1;
             removal.faces += recoloured;
         }
     }
     for (leftover, base) in leftovers {
-        removal.faces += recolour(&mut model, &leftover, base);
+        removal.faces += recolour(model, &leftover, base);
     }
 
     for (face, bound) in loops {
         if dead.contains(&face) {
             continue;
         }
-        let body = model.body(face).ok_or(LogoOutcome::Kept)?.to_string();
-        let edited = remove_ref(&body, bound).ok_or(LogoOutcome::Kept)?;
-        model.set_body(face, edited);
+        if let Some(body) = model.body(face) {
+            let body = body.to_string();
+            if let Some(edited) = remove_ref(&body, bound) {
+                model.set_body(face, edited);
+            }
+        }
     }
     model.delete_cascading(dead);
     model.collect_garbage();
     if !model.is_consistent() {
         return Err(LogoOutcome::Kept);
     }
-    let out: Vec<u8> = model.write().chars().map(|c| c as u8).collect();
-    Ok((out, removal))
+    Ok(removal)
 }
 
 // ---------------------------------------------------------------------------
 // STEP text
 
+#[derive(Clone)]
 struct Entity {
     id: u64,
     /// Statement as read, without the closing `;`.
@@ -266,6 +394,7 @@ struct Entity {
     edited: bool,
 }
 
+#[derive(Clone)]
 struct Model {
     head: String,
     tail: String,
@@ -1317,20 +1446,105 @@ fn is_pin_one_mark(piece: &Piece, all_pieces: &[Piece], model: &Model) -> bool {
     true
 }
 
+/// Checks if `piece` represents a valid candidate for a text, model, or logo marking.
+/// Non-marking features (such as PCB board outlines, mounting holes, solder pads, ground planes)
+/// are filtered out by dimensions, depth, aspect ratio, and face bound structure.
+fn is_marking_candidate(piece: &Piece, all_pieces: &[Piece], model: &Model) -> bool {
+    // 1. Must not be a Pin 1 polarity dot
+    if is_pin_one_mark(piece, all_pieces, model) {
+        return false;
+    }
+
+    let extent = [
+        piece.hi[0] - piece.lo[0],
+        piece.hi[1] - piece.lo[1],
+        piece.hi[2] - piece.lo[2],
+    ];
+    let max_dim = extent[0].max(extent[1]).max(extent[2]);
+
+    // 2. Individual marking character / logo piece size limits:
+    // Characters are typically 0.08mm to 12.0mm. Features larger than 12mm are board/mechanical.
+    if max_dim < 0.08 || max_dim > 12.0 {
+        return false;
+    }
+
+    // 3. For thin solids:
+    if piece.solid.is_some() {
+        let axis = (0..3)
+            .min_by(|&a, &b| extent[a].total_cmp(&extent[b]))
+            .unwrap_or(2);
+        let mut in_plane = Vec::new();
+        for a in 0..3 {
+            if a != axis {
+                in_plane.push(extent[a]);
+            }
+        }
+        in_plane.sort_by(f64::total_cmp);
+        // Exclude large copper zones / board substrate layers (max 10mm width/height, area <= 60mm^2)
+        if in_plane[0] > 10.0 || in_plane[1] > 10.0 || in_plane[0] * in_plane[1] > 60.0 {
+            return false;
+        }
+        return true;
+    }
+
+    // 4. For relief / engravings:
+    if piece.depth > MAX_RELIEF_MM {
+        return false;
+    }
+
+    let depth_axis = (0..3)
+        .min_by(|&a, &b| extent[a].total_cmp(&extent[b]))
+        .unwrap_or(2);
+    let mut in_plane = Vec::new();
+    for a in 0..3 {
+        if a != depth_axis {
+            in_plane.push(extent[a]);
+        }
+    }
+    in_plane.sort_by(f64::total_cmp);
+    let d_min = in_plane[0];
+    let d_max = in_plane[1];
+
+    if d_max > 10.0 {
+        return false;
+    }
+
+    // Ratio check: very long thin lines (> 50.0) are typically board edge chamfers or routing tracks
+    if d_max / d_min.max(1e-4) > 50.0 {
+        return false;
+    }
+
+    // Base face check: must have at least outer bound + relief bound
+    for &(face, _) in &piece.loops {
+        if face_bounds(model, face).len() < 2 {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn same_base_face(a: &Piece, b: &Piece) -> bool {
+    let Some(&(face_a, _)) = a.loops.first() else { return false; };
+    let Some(&(face_b, _)) = b.loops.first() else { return false; };
+    face_a == face_b
+}
+
 /// Selects all marking pieces (thin solids and relief engravings/embossings),
-/// excluding protected Pin 1 polarity marks.
-/// Returns the list of piece indices and the count of distinct marking clusters.
-fn select_all_markings(pieces: &[Piece], model: &Model) -> (Vec<usize>, usize) {
+/// excluding protected Pin 1 polarity marks and non-marking board structures.
+/// Returns distinct localized clusters of piece indices.
+fn select_all_markings(pieces: &[Piece], model: &Model) -> Vec<Vec<usize>> {
     let candidates: Vec<usize> = (0..pieces.len())
-        .filter(|&i| !is_pin_one_mark(&pieces[i], pieces, model))
+        .filter(|&i| is_marking_candidate(&pieces[i], pieces, model))
         .collect();
 
     if candidates.is_empty() {
-        return (Vec::new(), 0);
+        return Vec::new();
     }
 
     let mut visited: HashSet<usize> = HashSet::new();
-    let mut clusters = 0;
+    let mut clusters: Vec<Vec<usize>> = Vec::new();
+
     for &idx in &candidates {
         if visited.contains(&idx) {
             continue;
@@ -1343,12 +1557,12 @@ fn select_all_markings(pieces: &[Piece], model: &Model) -> (Vec<usize>, usize) {
             let size = (0..3)
                 .map(|a| p_curr.hi[a] - p_curr.lo[a])
                 .fold(0.0, f64::max);
-            let reach = 1.5 * size.max(0.5);
+            let reach = 1.8 * size.max(0.5);
 
             for &other in &candidates {
                 if !cluster.contains(&other)
-                    && coplanar(p_curr, &pieces[other])
-                    && gap(p_curr, &pieces[other]) <= reach
+                    && (same_base_face(p_curr, &pieces[other])
+                        || (coplanar(p_curr, &pieces[other]) && gap(p_curr, &pieces[other]) <= reach))
                 {
                     cluster.push(other);
                 }
@@ -1358,10 +1572,10 @@ fn select_all_markings(pieces: &[Piece], model: &Model) -> (Vec<usize>, usize) {
         for &c in &cluster {
             visited.insert(c);
         }
-        clusters += 1;
+        clusters.push(cluster);
     }
 
-    (candidates, clusters)
+    clusters
 }
 
 /// Whether `piece` has the logo shape `shape` (side faces, curved side faces).
@@ -1424,6 +1638,30 @@ fn unit(v: Point) -> Option<Point> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sot223_pin_one_retention() {
+        let path = std::path::Path::new(r"D:\Users\murmur\Desktop\board\sot-223-4p.step");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+        let (cleaned_bytes, outcome) = strip_logo_with_mode(&data, CleanMode::AllMarkings);
+        let removal = match outcome {
+            LogoOutcome::Removed(r) => r,
+            other => panic!("Expected Removed, got {:?}", other),
+        };
+        assert_eq!(removal.pieces, 10, "Expected 10 marking pieces removed (SOT-223-4P)");
+        let cleaned_bytes = cleaned_bytes.expect("Cleaned bytes should be returned");
+        let cleaned_text = String::from_utf8_lossy(&cleaned_bytes);
+        let cleaned_model = Model::parse(&cleaned_text).expect("Cleaned model should parse");
+        assert!(cleaned_model.is_consistent(), "Cleaned model must be consistent");
+        // Pin 1 dot must be preserved
+        let geom = Geometry::new(&cleaned_model);
+        let pieces = geom.pieces();
+        assert_eq!(pieces.len(), 1, "Only Pin 1 dot should remain");
+        assert!(is_pin_one_mark(&pieces[0], &pieces, &cleaned_model));
+    }
 
     #[test]
     fn removes_reference_from_list_only() {

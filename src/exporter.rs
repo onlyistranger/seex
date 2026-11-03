@@ -38,6 +38,7 @@ pub struct ExportRequest {
     pub schematic_fill_color: Option<[u8; 3]>,
     /// Rebuild downloaded 3D models without the EasyEDA logo (on by default).
     pub remove_model_logo: bool,
+    pub clean_all_markings: bool,
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
@@ -57,7 +58,10 @@ pub fn spawn_export(state: Arc<Mutex<MonitorState>>, req: ExportRequest) {
 
     std::thread::spawn(move || {
         let started_at = Instant::now();
-        let models = Arc::new(ModelCleanup::new(req.remove_model_logo));
+        let models = Arc::new(ModelCleanup::with_options(
+            req.remove_model_logo,
+            req.clean_all_markings,
+        ));
         let input_path = if is_altium_target(&req) {
             Some(create_temp_input_path())
         } else {

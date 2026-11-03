@@ -38,7 +38,7 @@ use std::ops::Range;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::step_logo::{LogoOutcome, strip_logo};
+use crate::step_logo::{CleanMode, LogoOutcome, strip_logo_with_mode};
 
 /// Share of the lowest vertices ignored when reading the underside of a part.
 const UNDERSIDE_TRIM: f64 = 0.02;
@@ -300,6 +300,7 @@ fn find_from(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 /// exactly which models still show the logo.
 pub struct ModelCleanup {
     remove_logo: bool,
+    clean_all_markings: bool,
     removed: AtomicUsize,
     with_logo: Mutex<Vec<String>>,
 }
@@ -314,6 +315,7 @@ impl fmt::Debug for ModelCleanup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModelCleanup")
             .field("remove_logo", &self.remove_logo)
+            .field("clean_all_markings", &self.clean_all_markings)
             .field("removed", &self.removed())
             .field("with_logo", &self.parts_with_logo())
             .finish()
@@ -322,23 +324,33 @@ impl fmt::Debug for ModelCleanup {
 
 impl ModelCleanup {
     pub fn new(remove_logo: bool) -> Self {
+        Self::with_options(remove_logo, false)
+    }
+
+    pub fn with_options(remove_logo: bool, clean_all_markings: bool) -> Self {
         Self {
             remove_logo,
+            clean_all_markings,
             removed: AtomicUsize::new(0),
             with_logo: Mutex::new(Vec::new()),
         }
     }
 
-    /// The model of `part` as it should be exported: without the logo when that is asked for and
+    /// The model of `part` as it should be exported: without the logo/markings when that is asked for and
     /// can be done, otherwise unchanged.
     pub fn clean<'a>(&self, part: &str, step_data: &'a [u8]) -> Cow<'a, [u8]> {
         if !self.remove_logo {
             return Cow::Borrowed(step_data);
         }
-        match strip_logo(step_data) {
+        let mode = if self.clean_all_markings {
+            CleanMode::AllMarkings
+        } else {
+            CleanMode::LogoOnly
+        };
+        match strip_logo_with_mode(step_data, mode) {
             (Some(model), LogoOutcome::Removed(removal)) => {
                 log::debug!(
-                    "{part}: removed the 3D model logo ({} pieces, {} faces)",
+                    "{part}: removed the 3D model markings/logo ({} pieces, {} faces)",
                     removal.pieces,
                     removal.faces
                 );
@@ -347,7 +359,7 @@ impl ModelCleanup {
             }
             (_, outcome) => {
                 if outcome.logo_remains() {
-                    log::warn!("{part}: the 3D model logo could not be removed ({outcome:?})");
+                    log::warn!("{part}: the 3D model logo/markings could not be removed ({outcome:?})");
                     if let Ok(mut parts) = self.with_logo.lock()
                         && !parts.iter().any(|known| known == part)
                     {
@@ -657,5 +669,26 @@ mod tests {
         assert_eq!(&step_data[points[0].spans[0].clone()], b"1.25");
         assert_eq!(&step_data[points[0].spans[1].clone()], b"-3.5");
         assert_eq!(&step_data[points[0].spans[2].clone()], b"-0.9");
+    }
+
+    #[test]
+    fn clean_all_markings_option_removes_text_from_single_model() {
+        let path = std::path::Path::new(r"D:\Users\murmur\Desktop\board\sot-223-4p.step");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(path).unwrap();
+
+        // 1. LogoOnly mode (default): doesn't touch non-EasyEDA text
+        let models_logo_only = ModelCleanup::with_options(true, false);
+        let res_logo_only = models_logo_only.clean("SOT-223", &data);
+        assert_eq!(models_logo_only.removed(), 0);
+        assert_eq!(res_logo_only.len(), data.len());
+
+        // 2. AllMarkings mode: strips markings and preserves Pin 1
+        let models_all = ModelCleanup::with_options(true, true);
+        let res_all = models_all.clean("SOT-223", &data);
+        assert_eq!(models_all.removed(), 1);
+        assert!(res_all.len() < data.len());
     }
 }

@@ -1,8 +1,9 @@
 @echo off
-title SeEx Ò»¼ü±àÒë Release °æ±¾
+chcp 65001 >nul
+title SeEx ä¸€é”®ç¼–è¯‘ Release ç‰ˆæœ¬
 
 echo ======================================================================
-echo                     SeEx Ò»¼ü±àÒë (Release)
+echo                     SeEx ä¸€é”®ç¼–è¯‘ (Release)
 echo ======================================================================
 echo.
 
@@ -22,7 +23,7 @@ if exist "e:\murmur\.cargo\bin\fxc.exe" set "GPUI_FXC_PATH=e:\murmur\.cargo\bin\
 if exist "%~dp0fxc.c" (
     where gcc >nul 2>nul
     if not errorlevel 1 (
-        echo [*] ÕýÔÚÉú³É HLSL ±àÒë¹¤¾ß fxc.exe ...
+        echo [*] æ­£åœ¨ç”Ÿæˆ HLSL ç¼–è¯‘å·¥å…· fxc.exe ...
         gcc -O2 "%~dp0fxc.c" -o "%~dp0fxc.exe" -ld3dcompiler_47
         if exist "%~dp0fxc.exe" set "GPUI_FXC_PATH=%~dp0fxc.exe"
     )
@@ -30,23 +31,23 @@ if exist "%~dp0fxc.c" (
 
 :HAS_FXC
 
-echo [1/2] ÕýÔÚ±àÒë SeEx Release °æ±¾£¬ÇëÉÔºò...
+echo [1/2] æ­£åœ¨ç¼–è¯‘ SeEx Release ç‰ˆæœ¬ï¼Œè¯·ç¨å€™...
 cargo build --release --bin seex
 
 if errorlevel 1 goto :BUILD_FAIL
 
 echo.
 echo ======================================================================
-echo [2/2] ±àÒë³É¹¦£¡
-echo [²úÎïÂ·¾¶] %~dp0target\release\seex.exe
+echo [2/2] ç¼–è¯‘æˆåŠŸï¼
+echo [è¾“å‡ºæ–‡ä»¶] %~dp0target\release\seex.exe
 echo ======================================================================
 goto :BUILD_END
 
 :BUILD_FAIL
 echo.
-echo [´íÎó] ±àÒëÎ´³É¹¦£¬Çë¼ì²éÉÏ·½´íÎóÌáÊ¾£¡
+echo [é”™è¯¯] ç¼–è¯‘æœªæˆåŠŸï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹é”™è¯¯æç¤ºï¼
 
 :BUILD_END
 echo.
-echo [ÌáÊ¾] °´ÈÎÒâ¼üÍË³ö...
+echo æŒ‰ä»»æ„é”®é€€å‡º...
 pause >nul

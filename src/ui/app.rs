@@ -1454,6 +1454,7 @@ pub fn apply_config_to_state(config: &AppConfig, state: &mut MonitorState) {
     state.set_export_lcsc_english(config.export.lcsc_english);
     state.set_export_force(config.export.force);
     state.set_export_remove_model_logo(config.export.remove_model_logo);
+    state.set_export_clean_all_markings(config.export.clean_all_markings);
     state.set_export_download_pdf(config.export.download_pdf);
     state.set_export_add_suffix(config.export.add_suffix);
     state.set_export_replace_dot(config.export.replace_dot);
@@ -1489,6 +1490,7 @@ pub fn snapshot_config(
             schematic_stroke_color,
             schematic_fill_color,
             remove_model_logo: state.export_remove_model_logo,
+            clean_all_markings: state.export_clean_all_markings,
             download_pdf: state.export_download_pdf,
             add_suffix: state.export_add_suffix,
             replace_dot: state.export_replace_dot,

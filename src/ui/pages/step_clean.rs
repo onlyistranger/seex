@@ -80,52 +80,62 @@ impl SeexUi {
 
         let mode_row = div()
             .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(12.0))
-            .child(components::fixed_label(locale::t(
-                "Cleaning Mode:",
-                "清理模式:",
-            )))
-            .child(components::selectable(
-                "clean-mode-logo-only",
-                locale::t("EasyEDA Logo Only", "仅立创 Logo"),
-                !self.step_clean_all_markings,
-                cx.listener(|this, _event: &ClickEvent, _window, cx| {
-                    if !this.step_clean_running {
-                        this.step_clean_all_markings = false;
-                        cx.notify();
-                    }
-                }),
-            ))
-            .child(components::selectable(
-                "clean-mode-all-markings",
-                locale::t(
-                    "All Markings (Pin 1 Protected)",
-                    "所有文字与丝印 (保护极性点)",
-                ),
-                self.step_clean_all_markings,
-                cx.listener(|this, _event: &ClickEvent, _window, cx| {
-                    if !this.step_clean_running {
-                        this.step_clean_all_markings = true;
-                        cx.notify();
-                    }
-                }),
-            ))
+            .flex_col()
+            .gap(px(6.0))
             .child(
                 div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(components::fixed_label(locale::t(
+                        "Cleaning Mode:",
+                        "去标范围:",
+                    )))
+                    .child(components::selectable(
+                        "clean-mode-logo-only",
+                        locale::t("EasyEDA Logo Only", "仅 EasyEDA Logo"),
+                        !self.step_clean_all_markings,
+                        cx.listener(|this, _event: &ClickEvent, _window, cx| {
+                            if !this.step_clean_running {
+                                this.step_clean_all_markings = false;
+                                cx.notify();
+                            }
+                        }),
+                    ))
+                    .child(components::selectable(
+                        "clean-mode-all-markings",
+                        locale::t(
+                            "All Markings & Silkscreen",
+                            "所有标记与丝印",
+                        ),
+                        self.step_clean_all_markings,
+                        cx.listener(|this, _event: &ClickEvent, _window, cx| {
+                            if !this.step_clean_running {
+                                this.step_clean_all_markings = true;
+                                cx.notify();
+                            }
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .pl(px(92.0))
                     .text_size(px(SMALL))
-                    .text_color(theme::muted())
                     .child(if self.step_clean_all_markings {
-                        locale::t(
-                            "Removes IC text, SOT markings and logos; preserves Pin 1 polarity dot.",
-                            "去除芯片文字、SOT丝印与Logo；保护并保留 Pin 1 极性圆点。",
-                        )
+                        div()
+                            .text_color(theme::danger())
+                            .child(locale::t(
+                                "⚠ Notice: Ineffective for composite assemblies composed of multiple STEPs; recommended for single models only (Pin 1 preserved).",
+                                "⚠ 提示：对多个 STEP 组成的复合体（板级装配体）无效；建议仅用于单器件模型以保证几何准确性（保留 Pin 1 极性点）。",
+                            ))
                     } else {
-                        locale::t(
-                            "Only removes EasyEDA / LCEDA vendor 3D logo geometries.",
-                            "仅检测并移除立创 EasyEDA / LCEDA 官方 3D Logo 几何特征。",
-                        )
+                        div()
+                            .text_color(theme::muted())
+                            .child(locale::t(
+                                "Safe EasyEDA / LCEDA vendor 3D logo removal (supports single models and full board assemblies).",
+                                "安全去除 EasyEDA / LCEDA 官方 3D 水印标志（支持单器件与复杂板级复合装配体，不触碰器件标记）。",
+                            ))
                     }),
             );
 

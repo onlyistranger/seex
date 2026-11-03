@@ -63,6 +63,7 @@ pub struct MonitorState {
     pub export_force: bool,
     /// Rebuild downloaded 3D models without the EasyEDA logo.
     pub export_remove_model_logo: bool,
+    pub export_clean_all_markings: bool,
     pub export_download_pdf: bool,
     pub export_add_suffix: bool,
     pub export_replace_dot: bool,
@@ -99,6 +100,7 @@ impl MonitorState {
             export_lcsc_english: false,
             export_force: false,
             export_remove_model_logo: true,
+            export_clean_all_markings: false,
             export_download_pdf: true,
             export_add_suffix: true,
             export_replace_dot: false,
@@ -309,6 +311,10 @@ impl MonitorState {
 
     pub fn set_export_remove_model_logo(&mut self, remove: bool) {
         self.export_remove_model_logo = remove;
+    }
+
+    pub fn set_export_clean_all_markings(&mut self, clean: bool) {
+        self.export_clean_all_markings = clean;
     }
 
     pub fn set_export_merge(&mut self, merge: bool) {

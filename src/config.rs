@@ -73,6 +73,8 @@ pub struct ExportConfig {
     pub schematic_fill_color: Option<[u8; 3]>,
     /// Rebuild downloaded 3D models without the EasyEDA logo; on unless turned off.
     pub remove_model_logo: bool,
+    #[serde(default)]
+    pub clean_all_markings: bool,
     pub download_pdf: bool,
     pub add_suffix: bool,
     pub replace_dot: bool,
@@ -99,6 +101,7 @@ impl Default for ExportConfig {
             schematic_stroke_color: [11, 56, 104],
             schematic_fill_color: Some([255, 255, 224]),
             remove_model_logo: true,
+            clean_all_markings: false,
             download_pdf: true,
             add_suffix: true,
             replace_dot: false,

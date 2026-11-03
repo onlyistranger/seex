@@ -381,6 +381,7 @@ impl SeexUi {
                 schematic_stroke_color: self.schematic_stroke_color,
                 schematic_fill_color: self.schematic_fill_color,
                 remove_model_logo: state.export_remove_model_logo,
+                clean_all_markings: state.export_clean_all_markings,
                 download_pdf: state.export_download_pdf,
                 add_suffix: state.export_add_suffix,
                 replace_dot: state.export_replace_dot,
@@ -400,34 +401,48 @@ impl SeexUi {
             force,
             english,
             remove_logo,
+            clean_all_markings,
             download_pdf,
             add_suffix,
             replace_dot,
             preserve_package,
-        ) = self
-            .state
-            .lock()
-            .map(|state| {
-                (
-                    state.export_target.clone(),
-                    match state.export_target.as_str() {
-                        "kicad" => state.export_kicad_mode.clone(),
-                        "cadence" => state.export_cadence_mode.clone(),
-                        _ => state.export_mode.clone(),
-                    },
-                    state.export_merge,
-                    state.export_append,
-                    state.export_continue_on_error,
-                    state.export_force,
-                    state.export_lcsc_english,
-                    state.export_remove_model_logo,
-                    state.export_download_pdf,
-                    state.export_add_suffix,
-                    state.export_replace_dot,
-                    state.export_preserve_package,
-                )
-            })
-            .unwrap_or_default();
+        ) = if let Ok(state) = self.state.lock() {
+            (
+                state.export_target.clone(),
+                match state.export_target.as_str() {
+                    "kicad" => state.export_kicad_mode.clone(),
+                    "cadence" => state.export_cadence_mode.clone(),
+                    _ => state.export_mode.clone(),
+                },
+                state.export_merge,
+                state.export_append,
+                state.export_continue_on_error,
+                state.export_force,
+                state.export_lcsc_english,
+                state.export_remove_model_logo,
+                state.export_clean_all_markings,
+                state.export_download_pdf,
+                state.export_add_suffix,
+                state.export_replace_dot,
+                state.export_preserve_package,
+            )
+        } else {
+            (
+                "altium".to_string(),
+                "full".to_string(),
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                false,
+                false,
+            )
+        };
 
         let path_input = self.input(InputSlot::ExportPath, window, cx);
         let library_input = self.input(InputSlot::LibraryName, window, cx);
@@ -677,6 +692,9 @@ impl SeexUi {
                         if let Ok(mut state) = this.state.lock() {
                             let next = !state.export_remove_model_logo;
                             state.set_export_remove_model_logo(next);
+                            if !next {
+                                state.set_export_clean_all_markings(false);
+                            }
                         }
                         this.mark_config_dirty();
                         cx.notify();
@@ -685,6 +703,30 @@ impl SeexUi {
                 locale::t(
                     "Remove 3D logo: rebuild 3D models without the EasyEDA logo; a model it cannot be removed from is exported as it is and listed",
                     "去除 3D 标志：重建 3D 模型并去除 EasyEDA 标志；无法去除的模型按原样导出并列出",
+                ),
+                HintArea::ExportToggles,
+                cx,
+            ))
+            .child(components::hint(
+                components::selectable(
+                    "toggle-clean-all-markings",
+                    locale::t("Remove all marks", "去除所有标记"),
+                    clean_all_markings,
+                    cx.listener(|this, _event: &ClickEvent, _window, cx| {
+                        if let Ok(mut state) = this.state.lock() {
+                            let next = !state.export_clean_all_markings;
+                            state.set_export_clean_all_markings(next);
+                            if next {
+                                state.set_export_remove_model_logo(true);
+                            }
+                        }
+                        this.mark_config_dirty();
+                        cx.notify();
+                    }),
+                ),
+                locale::t(
+                    "Remove all marks: enhanced 3D cleaning; removes IC text and silkscreen markings while keeping Pin 1 dot (applied to single models during export)",
+                    "去除所有标记：3D 模型增强去标，在去除 JLC 标志的基础上进一步清除芯片文字、封装丝印与标记并保护极性点（仅在导出单模型时处理以保证准确度）",
                 ),
                 HintArea::ExportToggles,
                 cx,
