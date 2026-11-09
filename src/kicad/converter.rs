@@ -318,17 +318,35 @@ mod tests {
 
     #[test]
     fn test_restore_footprint_name() {
-        assert_eq!(restore_footprint_name("XT30PW-M_C431092", false), "XT30PW-M");
+        assert_eq!(
+            restore_footprint_name("XT30PW-M_C431092", false),
+            "XT30PW-M"
+        );
         assert_eq!(restore_footprint_name("XT30PW-M", false), "XT30PW-M");
-        assert_eq!(restore_footprint_name("0603WAF1001T5E_C21190", false), "0603WAF1001T5E");
-        assert_eq!(restore_footprint_name("CH340N_C2977777_C2977777", false), "CH340N");
+        assert_eq!(
+            restore_footprint_name("0603WAF1001T5E_C21190", false),
+            "0603WAF1001T5E"
+        );
+        assert_eq!(
+            restore_footprint_name("CH340N_C2977777_C2977777", false),
+            "CH340N"
+        );
     }
 
     #[test]
     fn test_restore_step_model_name() {
-        assert_eq!(restore_step_model_name("CONN-TH_XT30PW-M_C431092", false), "CONN-TH_XT30PW-M");
-        assert_eq!(restore_step_model_name("CONN-TH_XT30PW-M", false), "CONN-TH_XT30PW-M");
-        assert_eq!(restore_step_model_name("C0603_L1_6-W0_8-H0_8_C1653", false), "C0603_L1.6-W0.8-H0.8");
+        assert_eq!(
+            restore_step_model_name("CONN-TH_XT30PW-M_C431092", false),
+            "CONN-TH_XT30PW-M"
+        );
+        assert_eq!(
+            restore_step_model_name("CONN-TH_XT30PW-M", false),
+            "CONN-TH_XT30PW-M"
+        );
+        assert_eq!(
+            restore_step_model_name("C0603_L1_6-W0_8-H0_8_C1653", false),
+            "C0603_L1.6-W0.8-H0.8"
+        );
         assert_eq!(
             restore_step_model_name("SOP-8_L4_9-W3_9-P1_27-LS6_0-BL-1_C2977777", false),
             "SOP-8_L4.9-W3.9-P1.27-LS6.0-BL-1"
@@ -341,23 +359,56 @@ mod tests {
 
     #[test]
     fn test_replace_dot_with_underscore() {
-        assert_eq!(restore_step_model_name("C0603_L1_6-W0_8-H0_8_C1653", true), "C0603_L1_6-W0_8-H0_8");
-        assert_eq!(restore_step_model_name("C0603_L1.6-W0.8-H0.8_C1653", true), "C0603_L1_6-W0_8-H0_8");
-        assert_eq!(restore_footprint_name("C0603_L1.6-W0.8-H0.8_C1653", true), "C0603_L1_6-W0_8-H0_8");
-        assert_eq!(restore_footprint_name("C0603_L1_6-W0_8-H0_8_C1653", false), "C0603_L1.6-W0.8-H0.8");
-        assert_eq!(make_suffixed_name("XT30PW-M", "C431092", false), "XT30PW-M_C431092");
-        assert_eq!(make_suffixed_name("XT30PW-M_C431092", "C431092", false), "XT30PW-M_C431092");
+        assert_eq!(
+            restore_step_model_name("C0603_L1_6-W0_8-H0_8_C1653", true),
+            "C0603_L1_6-W0_8-H0_8"
+        );
+        assert_eq!(
+            restore_step_model_name("C0603_L1.6-W0.8-H0.8_C1653", true),
+            "C0603_L1_6-W0_8-H0_8"
+        );
+        assert_eq!(
+            restore_footprint_name("C0603_L1.6-W0.8-H0.8_C1653", true),
+            "C0603_L1_6-W0_8-H0_8"
+        );
+        assert_eq!(
+            restore_footprint_name("C0603_L1_6-W0_8-H0_8_C1653", false),
+            "C0603_L1.6-W0.8-H0.8"
+        );
+        assert_eq!(
+            make_suffixed_name("XT30PW-M", "C431092", false),
+            "XT30PW-M_C431092"
+        );
+        assert_eq!(
+            make_suffixed_name("XT30PW-M_C431092", "C431092", false),
+            "XT30PW-M_C431092"
+        );
     }
 
     #[test]
     fn test_package_naming_rules() {
         // C6186 package SOT-223
-        assert_eq!(extract_package_base("SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR"), "SOT-223");
+        assert_eq!(
+            extract_package_base("SOT-223-3_L6.5-W3.4-P2.30-LS7.0-BR"),
+            "SOT-223"
+        );
         assert_eq!(extract_package_base("SOT-223"), "SOT-223");
-        assert_eq!(extract_package_base("SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR"), "SOT-23");
-        assert_eq!(extract_package_base("TO-252-2_L6.5-W5.3-P2.30-LS9.7-BR"), "TO-252");
-        assert_eq!(extract_package_base("SOD-123_L2.8-W1.8-LS3.7-RD"), "SOD-123");
-        assert_eq!(extract_package_base("SOP-8_L4.9-W3.9-P1.27-LS6.0-BL"), "SOP-8");
+        assert_eq!(
+            extract_package_base("SOT-23-5_L2.9-W1.6-P0.95-LS2.8-BR"),
+            "SOT-23"
+        );
+        assert_eq!(
+            extract_package_base("TO-252-2_L6.5-W5.3-P2.30-LS9.7-BR"),
+            "TO-252"
+        );
+        assert_eq!(
+            extract_package_base("SOD-123_L2.8-W1.8-LS3.7-RD"),
+            "SOD-123"
+        );
+        assert_eq!(
+            extract_package_base("SOP-8_L4.9-W3.9-P1.27-LS6.0-BL"),
+            "SOP-8"
+        );
         // Chip components preserve R / C identifier
         assert_eq!(extract_package_base("R0805"), "R0805");
         assert_eq!(extract_package_base("C0805"), "C0805");
@@ -367,9 +418,15 @@ mod tests {
         // Base filename (未开后缀)
         assert_eq!(restore_footprint_name("SOT-223", false), "SOT-223");
         // 开启后缀后为 SOT-223_C6186
-        assert_eq!(make_package_suffixed_name("SOT-223", "C6186", false), "SOT-223_C6186");
+        assert_eq!(
+            make_package_suffixed_name("SOT-223", "C6186", false),
+            "SOT-223_C6186"
+        );
         // 开启替换后为 SOT-223.C6186
-        assert_eq!(make_package_suffixed_name("SOT-223", "C6186", true), "SOT-223.C6186");
+        assert_eq!(
+            make_package_suffixed_name("SOT-223", "C6186", true),
+            "SOT-223.C6186"
+        );
 
         // R0805 with supplier_footprint as bare "0805" preserves R0805
         let res_comp = ComponentData {
@@ -391,9 +448,18 @@ mod tests {
             package: "R0805".to_string(),
             supplier_footprint: Some("0805".to_string()),
         };
-        assert_eq!(resolve_package_name(&res_comp, false).as_deref(), Some("R0805"));
-        assert_eq!(make_package_suffixed_name("R0805", "C3013955", false), "R0805_C3013955");
-        assert_eq!(make_package_suffixed_name("R0805", "C3013955", true), "R0805.C3013955");
+        assert_eq!(
+            resolve_package_name(&res_comp, false).as_deref(),
+            Some("R0805")
+        );
+        assert_eq!(
+            make_package_suffixed_name("R0805", "C3013955", false),
+            "R0805_C3013955"
+        );
+        assert_eq!(
+            make_package_suffixed_name("R0805", "C3013955", true),
+            "R0805.C3013955"
+        );
     }
 
     #[test]
@@ -424,4 +490,3 @@ mod tests {
         assert!((result - std::f64::consts::PI).abs() < 0.001);
     }
 }
-

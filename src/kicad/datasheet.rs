@@ -60,7 +60,11 @@ pub async fn download_datasheet_pdf(
     let mut tried_fallback = target_url.contains("lcsc.com/datasheet/");
 
     for attempt in 0..4 {
-        log::debug!("Fetching datasheet attempt {} at URL: {}", attempt + 1, target_url);
+        log::debug!(
+            "Fetching datasheet attempt {} at URL: {}",
+            attempt + 1,
+            target_url
+        );
         let resp = match client.get(&target_url).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -75,7 +79,11 @@ pub async fn download_datasheet_pdf(
         };
 
         if !resp.status().is_success() {
-            log::debug!("Datasheet URL {} returned status {}", target_url, resp.status());
+            log::debug!(
+                "Datasheet URL {} returned status {}",
+                target_url,
+                resp.status()
+            );
             if !tried_fallback && !lcsc_id.is_empty() {
                 tried_fallback = true;
                 target_url = format!("https://www.lcsc.com/datasheet/{}.pdf", lcsc_id);
@@ -116,7 +124,11 @@ pub async fn download_datasheet_pdf(
         break;
     }
 
-    log::warn!("Could not resolve valid PDF for {} (URL: {})", doc_name, datasheet_url);
+    log::warn!(
+        "Could not resolve valid PDF for {} (URL: {})",
+        doc_name,
+        datasheet_url
+    );
     Ok(DatasheetExportStatus::NotFound)
 }
 
@@ -124,9 +136,8 @@ pub async fn download_datasheet_pdf(
 pub fn extract_pdf_url_from_html(html: &str, lcsc_id: &str) -> Option<String> {
     // 1. Search for iframe or embed src
     static FRAME_RE: OnceLock<Regex> = OnceLock::new();
-    let frame_re = FRAME_RE.get_or_init(|| {
-        Regex::new(r#"(?i)<(?:iframe|embed)[^>]+src=["']([^"']+)["']"#).unwrap()
-    });
+    let frame_re = FRAME_RE
+        .get_or_init(|| Regex::new(r#"(?i)<(?:iframe|embed)[^>]+src=["']([^"']+)["']"#).unwrap());
 
     for cap in frame_re.captures_iter(html) {
         let src = &cap[1];
@@ -155,7 +166,10 @@ pub fn extract_pdf_url_from_html(html: &str, lcsc_id: &str) -> Option<String> {
 
     static LCSC_RE: OnceLock<Regex> = OnceLock::new();
     let lcsc_re = LCSC_RE.get_or_init(|| {
-        Regex::new(r#"(?i)https?://datasheet\.lcsc\.com/datasheet/pdf/[^\s"'<>]+\.pdf(?:\?[^\s"'<>]*)?"#).unwrap()
+        Regex::new(
+            r#"(?i)https?://datasheet\.lcsc\.com/datasheet/pdf/[^\s"'<>]+\.pdf(?:\?[^\s"'<>]*)?"#,
+        )
+        .unwrap()
     });
     if let Some(m) = lcsc_re.find(html) {
         return Some(clean_url(m.as_str()));
@@ -199,9 +213,7 @@ fn clean_url(url: &str) -> String {
 }
 
 fn extract_file_param(src: &str) -> Option<String> {
-    let query_str = src.split_once('?')
-        .map(|(_, q)| q)
-        .unwrap_or(src);
+    let query_str = src.split_once('?').map(|(_, q)| q).unwrap_or(src);
     for pair in query_str.split('&') {
         if let Some((k, v)) = pair.split_once('=') {
             if k == "file" {
@@ -238,7 +250,10 @@ mod tests {
     #[test]
     fn test_percent_decode() {
         let encoded = "https%3A%2F%2Fatta.szlcsc.com%2Fupload%2Ftest.pdf";
-        assert_eq!(percent_decode(encoded), "https://atta.szlcsc.com/upload/test.pdf");
+        assert_eq!(
+            percent_decode(encoded),
+            "https://atta.szlcsc.com/upload/test.pdf"
+        );
     }
 
     #[test]
@@ -264,7 +279,10 @@ mod tests {
             <iframe src="/pdfjs/web/viewer.html?file=https%3A%2F%2Fatta.szlcsc.com%2Fupload%2Ftest.pdf#page=1"></iframe>
         "#;
         let url = extract_pdf_url_from_html(html, "C123");
-        assert_eq!(url.as_deref(), Some("https://atta.szlcsc.com/upload/test.pdf"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://atta.szlcsc.com/upload/test.pdf")
+        );
     }
 
     #[test]
@@ -287,7 +305,10 @@ mod tests {
             </div>
         "#;
         let url = extract_pdf_url_from_html(html, "C77978");
-        assert_eq!(url.as_deref(), Some("https://www.lcsc.com/datasheet/C77978.pdf"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://www.lcsc.com/datasheet/C77978.pdf")
+        );
     }
 
     #[tokio::test]

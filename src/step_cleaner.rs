@@ -331,7 +331,8 @@ mod tests {
             return;
         }
         let data = fs::read(path).unwrap();
-        let (cleaned, outcome) = crate::step_logo::strip_logo_with_mode(&data, CleanMode::AllMarkings);
+        let (cleaned, outcome) =
+            crate::step_logo::strip_logo_with_mode(&data, CleanMode::AllMarkings);
         match outcome {
             LogoOutcome::Removed(rem) => {
                 // SOT-223 has 10 text characters and 1 Pin 1 dot.
@@ -346,4 +347,3 @@ mod tests {
         }
     }
 }
-

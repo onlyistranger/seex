@@ -66,8 +66,11 @@ pub fn convert_footprint(
     if args.add_suffix {
         // Export footprint (suffixed)
         let footprint_data = exporter.export(&ki_footprint)?;
-        let (_, status) =
-            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
+        let (_, status) = lib_manager.write_footprint_if_needed(
+            &ki_footprint.name,
+            &footprint_data,
+            args.force,
+        )?;
 
         match status {
             FileWriteStatus::Written => log::debug!("Wrote footprint: {}", ki_footprint.name),
@@ -121,8 +124,11 @@ pub fn convert_footprint(
     } else {
         // Export ONLY clean footprint
         let footprint_data = exporter.export(&ki_footprint)?;
-        let (_, status) =
-            lib_manager.write_footprint_if_needed(&ki_footprint.name, &footprint_data, args.force)?;
+        let (_, status) = lib_manager.write_footprint_if_needed(
+            &ki_footprint.name,
+            &footprint_data,
+            args.force,
+        )?;
 
         match status {
             FileWriteStatus::Written => log::debug!("Wrote clean footprint: {}", ki_footprint.name),
@@ -175,7 +181,10 @@ pub fn convert_footprint(
                             log::debug!("Wrote package footprint: {}", pkg_footprint.name)
                         }
                         FileWriteStatus::Skipped => {
-                            log::debug!("Skipped existing package footprint: {}", pkg_footprint.name)
+                            log::debug!(
+                                "Skipped existing package footprint: {}",
+                                pkg_footprint.name
+                            )
                         }
                     }
                 }
@@ -216,7 +225,10 @@ pub fn convert_footprint(
 
                     match clean_status {
                         FileWriteStatus::Written => {
-                            log::debug!("Wrote clean package footprint: {}", clean_pkg_footprint.name)
+                            log::debug!(
+                                "Wrote clean package footprint: {}",
+                                clean_pkg_footprint.name
+                            )
                         }
                         FileWriteStatus::Skipped => {
                             log::debug!(
@@ -263,7 +275,10 @@ pub fn convert_footprint(
 
                     match status {
                         FileWriteStatus::Written => {
-                            log::debug!("Wrote clean package footprint: {}", clean_pkg_footprint.name)
+                            log::debug!(
+                                "Wrote clean package footprint: {}",
+                                clean_pkg_footprint.name
+                            )
                         }
                         FileWriteStatus::Skipped => {
                             log::debug!(
@@ -701,7 +716,6 @@ pub fn build_ki_footprint(
     Ok(ki_footprint)
 }
 
-
 fn is_footprint_graphic_layer(layer_id: i32) -> bool {
     matches!(layer_id, 3 | 4 | 10 | 11 | 13 | 14 | 15 | 48 | 49 | 99)
 }
@@ -1012,9 +1026,7 @@ mod tests {
             bbox_x: 0.0,
             bbox_y: 0.0,
             symbol_parts: Vec::new(),
-            package_detail: vec![
-                "PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string(),
-            ],
+            package_detail: vec!["PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string()],
             package_bbox_x: 0.0,
             package_bbox_y: 0.0,
             model_3d: Some(crate::easyeda::Model3dInfo {
@@ -1035,16 +1047,36 @@ mod tests {
         let suffixed_fp = lib_manager.get_footprint_path("XT30PW-M_C431092");
         let clean_fp = lib_manager.get_footprint_path("XT30PW-M");
 
-        assert!(suffixed_fp.exists(), "Suffixed footprint should exist: {:?}", suffixed_fp);
-        assert!(clean_fp.exists(), "Clean footprint should exist: {:?}", clean_fp);
+        assert!(
+            suffixed_fp.exists(),
+            "Suffixed footprint should exist: {:?}",
+            suffixed_fp
+        );
+        assert!(
+            clean_fp.exists(),
+            "Clean footprint should exist: {:?}",
+            clean_fp
+        );
 
         let clean_content = fs::read_to_string(&clean_fp).unwrap();
-        assert!(clean_content.contains(r#"(footprint "XT30PW-M""#), "Header should have clean name");
-        assert!(clean_content.contains(r#"(fp_text value "XT30PW-M""#), "Value should have clean name");
-        assert!(clean_content.contains("CONN-TH_XT30PW-M.step"), "Model path should reference clean step name");
+        assert!(
+            clean_content.contains(r#"(footprint "XT30PW-M""#),
+            "Header should have clean name"
+        );
+        assert!(
+            clean_content.contains(r#"(fp_text value "XT30PW-M""#),
+            "Value should have clean name"
+        );
+        assert!(
+            clean_content.contains("CONN-TH_XT30PW-M.step"),
+            "Model path should reference clean step name"
+        );
 
         let suffixed_content = fs::read_to_string(&suffixed_fp).unwrap();
-        assert!(suffixed_content.contains("CONN-TH_XT30PW-M_C431092.step"), "Suffixed model path");
+        assert!(
+            suffixed_content.contains("CONN-TH_XT30PW-M_C431092.step"),
+            "Suffixed model path"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -1079,9 +1111,7 @@ mod tests {
             bbox_x: 0.0,
             bbox_y: 0.0,
             symbol_parts: Vec::new(),
-            package_detail: vec![
-                "PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string(),
-            ],
+            package_detail: vec!["PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string()],
             package_bbox_x: 0.0,
             package_bbox_y: 0.0,
             model_3d: Some(crate::easyeda::Model3dInfo {
@@ -1102,12 +1132,25 @@ mod tests {
         let suffixed_fp = lib_manager.get_footprint_path("XT30PW-M_C431092");
         let clean_fp = lib_manager.get_footprint_path("XT30PW-M");
 
-        assert!(!suffixed_fp.exists(), "Suffixed footprint should NOT exist when add_suffix is false");
-        assert!(clean_fp.exists(), "Clean footprint should exist: {:?}", clean_fp);
+        assert!(
+            !suffixed_fp.exists(),
+            "Suffixed footprint should NOT exist when add_suffix is false"
+        );
+        assert!(
+            clean_fp.exists(),
+            "Clean footprint should exist: {:?}",
+            clean_fp
+        );
 
         let clean_content = fs::read_to_string(&clean_fp).unwrap();
-        assert!(clean_content.contains(r#"(footprint "XT30PW-M""#), "Header should have clean name");
-        assert!(clean_content.contains("CONN-TH_XT30PW-M.step"), "Model path should reference clean step name");
+        assert!(
+            clean_content.contains(r#"(footprint "XT30PW-M""#),
+            "Header should have clean name"
+        );
+        assert!(
+            clean_content.contains("CONN-TH_XT30PW-M.step"),
+            "Model path should reference clean step name"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -1144,9 +1187,7 @@ mod tests {
             bbox_x: 0.0,
             bbox_y: 0.0,
             symbol_parts: Vec::new(),
-            package_detail: vec![
-                "PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string(),
-            ],
+            package_detail: vec!["PAD~1~10~10~20~20~0~1~0~0~0~0~0~0~~".to_string()],
             package_bbox_x: 0.0,
             package_bbox_y: 0.0,
             model_3d: Some(crate::easyeda::Model3dInfo {
@@ -1163,11 +1204,20 @@ mod tests {
         };
 
         convert_footprint(&options_no_suffix, &comp_c6186, &lib_manager, "C6186").unwrap();
-        assert!(lib_manager.get_footprint_path("AMS1117-3.3").exists(), "Clean title footprint should exist");
-        assert!(lib_manager.get_footprint_path("SOT-223").exists(), "Clean package footprint SOT-223 should exist");
+        assert!(
+            lib_manager.get_footprint_path("AMS1117-3.3").exists(),
+            "Clean title footprint should exist"
+        );
+        assert!(
+            lib_manager.get_footprint_path("SOT-223").exists(),
+            "Clean package footprint SOT-223 should exist"
+        );
         assert!(!lib_manager.get_footprint_path("SOT-223_C6186").exists());
         let sot223_mod = fs::read_to_string(lib_manager.get_footprint_path("SOT-223")).unwrap();
-        assert!(sot223_mod.contains("SOT-223.step"), "SOT-223.kicad_mod should reference SOT-223.step");
+        assert!(
+            sot223_mod.contains("SOT-223.step"),
+            "SOT-223.kicad_mod should reference SOT-223.step"
+        );
 
         // 2. preserve_package: true, add_suffix: true, replace_dot: false
         let options_suffix = KicadExportOptions {
@@ -1187,10 +1237,20 @@ mod tests {
         convert_footprint(&options_suffix, &comp_c6186, &lib_manager, "C6186").unwrap();
         assert!(lib_manager.get_footprint_path("AMS1117-3.3_C6186").exists());
         assert!(lib_manager.get_footprint_path("AMS1117-3.3").exists());
-        assert!(lib_manager.get_footprint_path("SOT-223_C6186").exists(), "Suffixed package footprint SOT-223_C6186 should exist");
-        assert!(lib_manager.get_footprint_path("SOT-223").exists(), "Clean package footprint SOT-223 should exist");
-        let sot223_suf_mod = fs::read_to_string(lib_manager.get_footprint_path("SOT-223_C6186")).unwrap();
-        assert!(sot223_suf_mod.contains("SOT-223_C6186.step"), "SOT-223_C6186.kicad_mod should reference SOT-223_C6186.step");
+        assert!(
+            lib_manager.get_footprint_path("SOT-223_C6186").exists(),
+            "Suffixed package footprint SOT-223_C6186 should exist"
+        );
+        assert!(
+            lib_manager.get_footprint_path("SOT-223").exists(),
+            "Clean package footprint SOT-223 should exist"
+        );
+        let sot223_suf_mod =
+            fs::read_to_string(lib_manager.get_footprint_path("SOT-223_C6186")).unwrap();
+        assert!(
+            sot223_suf_mod.contains("SOT-223_C6186.step"),
+            "SOT-223_C6186.kicad_mod should reference SOT-223_C6186.step"
+        );
 
         // 3. preserve_package: true, add_suffix: true, replace_dot: true
         let options_replace = KicadExportOptions {
@@ -1210,12 +1270,21 @@ mod tests {
         convert_footprint(&options_replace, &comp_c6186, &lib_manager, "C6186").unwrap();
         assert!(lib_manager.get_footprint_path("AMS1117-3_3_C6186").exists());
         assert!(lib_manager.get_footprint_path("AMS1117-3_3").exists());
-        assert!(lib_manager.get_footprint_path("SOT-223.C6186").exists(), "Suffixed package footprint SOT-223.C6186 should exist when replace_dot is true");
-        assert!(lib_manager.get_footprint_path("SOT-223").exists(), "Clean package footprint SOT-223 should exist");
-        let sot223_rep_mod = fs::read_to_string(lib_manager.get_footprint_path("SOT-223.C6186")).unwrap();
-        assert!(sot223_rep_mod.contains("SOT-223.C6186.step"), "SOT-223.C6186.kicad_mod should reference SOT-223.C6186.step");
+        assert!(
+            lib_manager.get_footprint_path("SOT-223.C6186").exists(),
+            "Suffixed package footprint SOT-223.C6186 should exist when replace_dot is true"
+        );
+        assert!(
+            lib_manager.get_footprint_path("SOT-223").exists(),
+            "Clean package footprint SOT-223 should exist"
+        );
+        let sot223_rep_mod =
+            fs::read_to_string(lib_manager.get_footprint_path("SOT-223.C6186")).unwrap();
+        assert!(
+            sot223_rep_mod.contains("SOT-223.C6186.step"),
+            "SOT-223.C6186.kicad_mod should reference SOT-223.C6186.step"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }
-

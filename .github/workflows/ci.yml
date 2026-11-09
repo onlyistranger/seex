@@ -50,6 +50,35 @@ jobs:
       - name: Run tests
         run: cargo test --locked
 
+  build-wasm:
+    name: Build WebAssembly (seex-wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build release WebAssembly
+        run: cargo build --release --manifest-path crates/seex-wasm/Cargo.toml --target wasm32-unknown-unknown
+
+      - name: Package WebAssembly distribution
+        run: |
+          mkdir -p dist/wasm
+          cp crates/seex-wasm/target/wasm32-unknown-unknown/release/seex_wasm.wasm dist/wasm/
+          cp crates/seex-wasm/web/seex.js dist/wasm/
+          cp crates/seex-wasm/web/index.html dist/wasm/
+          echo "# SeEx WebAssembly Browser Build" > dist/wasm/README.md
+
+      - name: Upload WebAssembly artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: seex-wasm-web
+          path: dist/wasm/*
+
   build:
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

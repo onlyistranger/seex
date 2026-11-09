@@ -560,7 +560,10 @@ mod tests {
         assert_eq!(manager.footprint_lib_name(), "custom");
         assert_eq!(manager.model_lib_name(), "custom");
         assert_eq!(manager.model_dir_name(), "custom.3dshapes");
-        assert_eq!(manager.doc_lib_dir(), PathBuf::from("out").join("custom.doc"));
+        assert_eq!(
+            manager.doc_lib_dir(),
+            PathBuf::from("out").join("custom.doc")
+        );
     }
 
     #[test]

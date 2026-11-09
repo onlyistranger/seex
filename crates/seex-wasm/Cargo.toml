@@ -1,0 +1,21 @@
+[package]
+name = "seex-wasm"
+version = "3.0.0"
+edition = "2024"
+description = "SeEx WebAssembly Client-side Engine for Browser (STEP Cleaning, EDA Conversion)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[dependencies]
+log = "0.4.34"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

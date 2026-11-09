@@ -91,9 +91,8 @@ pub async fn convert_3d_model(
         .as_ref()
         .map(|pkg| make_package_suffixed_name(pkg, lcsc_id, args.replace_dot));
 
-    let mut need_step = args.force
-        || (args.add_suffix && !step_path.exists())
-        || !clean_step_path.exists();
+    let mut need_step =
+        args.force || (args.add_suffix && !step_path.exists()) || !clean_step_path.exists();
 
     if let Some(pkg) = &pkg_name {
         if !lib_manager.get_step_path(pkg).exists() {
@@ -158,7 +157,6 @@ pub async fn convert_3d_model(
         Err(e) => Err(e),
     }
 }
-
 
 fn decrement(counter: &AtomicUsize) {
     let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {

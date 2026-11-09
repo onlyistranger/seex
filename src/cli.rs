@@ -11,6 +11,22 @@ pub struct Cli {
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub prompt: bool,
 
+    /// Run SeEx as an HTTP Web Server with browser UI and REST API
+    #[arg(short = 's', long, action = ArgAction::SetTrue)]
+    pub server: bool,
+
+    /// Network interface / IP to bind on (when --server is used)
+    #[arg(long, default_value = "0.0.0.0")]
+    pub host: String,
+
+    /// Port to listen on (when --server is used)
+    #[arg(short, long, default_value_t = 8080)]
+    pub port: u16,
+
+    /// Open browser automatically (when --server is used)
+    #[arg(long)]
+    pub open: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -112,6 +128,22 @@ pub enum Commands {
         /// Remove all text, model numbers, and silkscreen markings (with Pin 1 protection) instead of only LCEDA/EasyEDA logos
         #[arg(short = 'a', long)]
         all_markings: bool,
+    },
+    /// Run SeEx as an HTTP Web Server with browser UI and REST API
+    #[command(name = "server", alias = "web")]
+    Server {
+        /// Network interface / IP to bind on
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+        /// Port to listen on
+        #[arg(short, long, default_value_t = 8080)]
+        port: u16,
+        /// Open the browser automatically on startup
+        #[arg(long)]
+        open: bool,
+        /// Custom output directory
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -282,7 +314,18 @@ pub enum KicadVersion {
 
 pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    if cli.server {
+        return crate::server::run_server(cli.host, cli.port, cli.open, None);
+    }
     match cli.command {
+        Some(Commands::Server {
+            host,
+            port,
+            open,
+            output,
+        }) => {
+            crate::server::run_server(host, port, open, output)?;
+        }
         Some(Commands::CleanStep {
             input,
             output,
@@ -294,14 +337,18 @@ pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             let input = input
                 .or(pos_input)
                 .ok_or("Missing input path. Usage: seex clean-step <INPUT_PATH> <OUTPUT_DIR>")?;
-            let output = output
-                .or(pos_output)
-                .ok_or("Missing output directory. Usage: seex clean-step <INPUT_PATH> <OUTPUT_DIR>")?;
+            let output = output.or(pos_output).ok_or(
+                "Missing output directory. Usage: seex clean-step <INPUT_PATH> <OUTPUT_DIR>",
+            )?;
             run_clean_step(&input, &output, recursive, all_markings)?;
         }
         Some(_) => {
-            println!("This subcommand requires the full GUI or is not yet implemented in headless mode.");
-            println!("Run 'seex --help' for available CLI options, or run without arguments to launch the GUI.");
+            println!(
+                "This subcommand requires the full GUI or is not yet implemented in headless mode."
+            );
+            println!(
+                "Run 'seex --help' for available CLI options, or run without arguments to launch the GUI."
+            );
         }
         None => {
             if cli.prompt {
@@ -310,7 +357,9 @@ pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  seex clean-step -i ./step_models -o ./cleaned -r");
                 println!("  seex clean-step -i ./step_models -o ./cleaned -r -a");
             } else {
-                println!("Run 'seex --help' for usage, or run without arguments to launch the GUI.");
+                println!(
+                    "Run 'seex --help' for usage, or run without arguments to launch the GUI."
+                );
             }
         }
     }
@@ -333,10 +382,14 @@ fn run_clean_step(
     println!("Input:        {}", input.display());
     println!("Destination:  {}", output.display());
     println!("Recursive:    {}", recursive);
-    println!("Clean Mode:   {}", match mode {
-        crate::step_logo::CleanMode::LogoOnly => "Logo Only (EasyEDA / LCEDA)",
-        crate::step_logo::CleanMode::AllMarkings => "All Markings & Silkscreen (with Pin 1 retention protection)",
-    });
+    println!(
+        "Clean Mode:   {}",
+        match mode {
+            crate::step_logo::CleanMode::LogoOnly => "Logo Only (EasyEDA / LCEDA)",
+            crate::step_logo::CleanMode::AllMarkings =>
+                "All Markings & Silkscreen (with Pin 1 retention protection)",
+        }
+    );
     println!("---------------------------------");
 
     let options = crate::step_cleaner::CleanStepOptions {
@@ -349,26 +402,42 @@ fn run_clean_step(
     let summary = crate::step_cleaner::clean_step(&options, |idx, total, item| {
         let status = match item.outcome {
             crate::step_logo::LogoOutcome::Removed(rem) => {
-                format!("REMOVED {} marking(s) ({} pieces, {} faces)", rem.logos, rem.pieces, rem.faces)
+                format!(
+                    "REMOVED {} marking(s) ({} pieces, {} faces)",
+                    rem.logos, rem.pieces, rem.faces
+                )
             }
             crate::step_logo::LogoOutcome::NotFound => "No marking found".to_string(),
             crate::step_logo::LogoOutcome::Kept => "Marking detected but kept (safety)".to_string(),
             crate::step_logo::LogoOutcome::Unreadable => "Unreadable STEP file".to_string(),
         };
 
-        let file_name = item.src_path.file_name().unwrap_or_default().to_string_lossy();
+        let file_name = item
+            .src_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
         if let Some(err) = &item.error {
             eprintln!("[{idx}/{total}] {file_name}: ERROR: {err}");
         } else {
-            println!("[{idx}/{total}] {file_name}: {status} -> {}", item.dest_path.display());
+            println!(
+                "[{idx}/{total}] {file_name}: {status} -> {}",
+                item.dest_path.display()
+            );
         }
     });
 
     println!("---------------------------------");
     println!("Summary:");
     println!("  Total files scanned:     {}", summary.total_files);
-    println!("  Files modified:          {} / {}", summary.cleaned_files_count, summary.total_files);
-    println!("  Markings/Logos removed:  {} ({} pieces, {} faces)", summary.cleaned_logos_count, summary.cleaned_pieces, summary.cleaned_faces);
+    println!(
+        "  Files modified:          {} / {}",
+        summary.cleaned_files_count, summary.total_files
+    );
+    println!(
+        "  Markings/Logos removed:  {} ({} pieces, {} faces)",
+        summary.cleaned_logos_count, summary.cleaned_pieces, summary.cleaned_faces
+    );
     println!("  Already clean (no mark): {}", summary.not_found_count);
     println!("  Kept with marking:       {}", summary.kept_count);
     println!("  Unreadable:              {}", summary.unreadable_count);
@@ -537,5 +606,41 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_server_subcommand() {
+        let cli = Cli::try_parse_from([
+            "seex",
+            "server",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9000",
+            "--open",
+        ])
+        .expect("server command should parse");
+        let Some(Commands::Server {
+            host,
+            port,
+            open,
+            output,
+        }) = cli.command
+        else {
+            panic!("expected server command");
+        };
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 9000);
+        assert!(open);
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn parses_server_flag() {
+        let cli = Cli::try_parse_from(["seex", "-s", "--port", "3000"])
+            .expect("server flag should parse");
+        assert!(cli.server);
+        assert_eq!(cli.port, 3000);
+        assert_eq!(cli.host, "0.0.0.0");
     }
 }

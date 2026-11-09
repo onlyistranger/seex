@@ -115,7 +115,10 @@ pub fn strip_logo_with_mode(data: &[u8], mode: CleanMode) -> (Option<Vec<u8>>, L
 }
 
 /// The model without the EasyEDA logo / markings; otherwise why it was left as it was.
-fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
+fn remove_logo_with_mode(
+    data: &[u8],
+    mode: CleanMode,
+) -> Result<(Vec<u8>, LogoRemoval), LogoOutcome> {
     let text: String = data.iter().map(|&byte| byte as char).collect();
     let mut model = Model::parse(&text).ok_or(LogoOutcome::Unreadable)?;
 
@@ -206,8 +209,14 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
 
     // CleanMode::AllMarkings:
     // 3. Fast trial: try removing all clusters combined in one pass on a cloned model
-    let all_selected: Vec<usize> = clusters.iter().flat_map(|(c, _, _)| c.iter().copied()).collect();
-    let all_icons: HashSet<u64> = clusters.iter().flat_map(|(_, icons, _)| icons.iter().copied()).collect();
+    let all_selected: Vec<usize> = clusters
+        .iter()
+        .flat_map(|(c, _, _)| c.iter().copied())
+        .collect();
+    let all_icons: HashSet<u64> = clusters
+        .iter()
+        .flat_map(|(_, icons, _)| icons.iter().copied())
+        .collect();
     let total_logos: usize = clusters.iter().map(|(_, _, count)| *count).sum();
 
     let mut fast_trial = model.clone();
@@ -225,7 +234,9 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
 
     // 4. Resilient per-cluster fallback for complex multi-component / board-level models:
     // Process cluster by cluster with individual manifold consistency checks.
-    log::warn!("Bulk marking removal failed manifold check; falling back to resilient per-cluster removal");
+    log::warn!(
+        "Bulk marking removal failed manifold check; falling back to resilient per-cluster removal"
+    );
     let mut total_removal = LogoRemoval::default();
     for (cluster, icon_faces, log_count) in clusters {
         let mut test_model = model.clone();
@@ -242,7 +253,10 @@ fn remove_logo_with_mode(data: &[u8], mode: CleanMode) -> Result<(Vec<u8>, LogoR
             total_removal.pieces += rem.pieces;
             total_removal.faces += rem.faces;
         } else {
-            log::debug!("Skipped marking cluster ({} pieces) to preserve manifold topology", cluster.len());
+            log::debug!(
+                "Skipped marking cluster ({} pieces) to preserve manifold topology",
+                cluster.len()
+            );
         }
     }
 
@@ -851,7 +865,12 @@ impl<'a> Geometry<'a> {
             for edge in face_edges(self.model, face) {
                 let refs = self.model.refs(edge);
                 for vertex in refs.iter().take(2) {
-                    if let Some(p) = self.model.refs(*vertex).first().and_then(|&p| self.point(p)) {
+                    if let Some(p) = self
+                        .model
+                        .refs(*vertex)
+                        .first()
+                        .and_then(|&p| self.point(p))
+                    {
                         points.push(p);
                     }
                 }
@@ -864,7 +883,10 @@ impl<'a> Geometry<'a> {
                             }
                         }
                     } else if kind == "CIRCLE" {
-                        if let Some(r) = numbers(self.model.body(curve).unwrap_or("")).first().copied() {
+                        if let Some(r) = numbers(self.model.body(curve).unwrap_or(""))
+                            .first()
+                            .copied()
+                        {
                             if let Some(&placement) = self.model.refs(curve).first() {
                                 let prefs = self.model.refs(placement);
                                 if let Some(origin) = prefs.first().and_then(|&id| self.point(id)) {
@@ -1381,9 +1403,7 @@ fn is_pin_one_mark(piece: &Piece, all_pieces: &[Piece], model: &Model) -> bool {
         piece.hi[1] - piece.lo[1],
         piece.hi[2] - piece.lo[2],
     ];
-    let depth_axis = (0..3)
-        .min_by(|&a, &b| ex[a].total_cmp(&ex[b]))
-        .unwrap_or(2);
+    let depth_axis = (0..3).min_by(|&a, &b| ex[a].total_cmp(&ex[b])).unwrap_or(2);
     let mut in_plane = Vec::new();
     for a in 0..3 {
         if a != depth_axis {
@@ -1525,8 +1545,12 @@ fn is_marking_candidate(piece: &Piece, all_pieces: &[Piece], model: &Model) -> b
 }
 
 fn same_base_face(a: &Piece, b: &Piece) -> bool {
-    let Some(&(face_a, _)) = a.loops.first() else { return false; };
-    let Some(&(face_b, _)) = b.loops.first() else { return false; };
+    let Some(&(face_a, _)) = a.loops.first() else {
+        return false;
+    };
+    let Some(&(face_b, _)) = b.loops.first() else {
+        return false;
+    };
     face_a == face_b
 }
 
@@ -1562,7 +1586,8 @@ fn select_all_markings(pieces: &[Piece], model: &Model) -> Vec<Vec<usize>> {
             for &other in &candidates {
                 if !cluster.contains(&other)
                     && (same_base_face(p_curr, &pieces[other])
-                        || (coplanar(p_curr, &pieces[other]) && gap(p_curr, &pieces[other]) <= reach))
+                        || (coplanar(p_curr, &pieces[other])
+                            && gap(p_curr, &pieces[other]) <= reach))
                 {
                     cluster.push(other);
                 }
@@ -1651,11 +1676,17 @@ mod tests {
             LogoOutcome::Removed(r) => r,
             other => panic!("Expected Removed, got {:?}", other),
         };
-        assert_eq!(removal.pieces, 10, "Expected 10 marking pieces removed (SOT-223-4P)");
+        assert_eq!(
+            removal.pieces, 10,
+            "Expected 10 marking pieces removed (SOT-223-4P)"
+        );
         let cleaned_bytes = cleaned_bytes.expect("Cleaned bytes should be returned");
         let cleaned_text = String::from_utf8_lossy(&cleaned_bytes);
         let cleaned_model = Model::parse(&cleaned_text).expect("Cleaned model should parse");
-        assert!(cleaned_model.is_consistent(), "Cleaned model must be consistent");
+        assert!(
+            cleaned_model.is_consistent(),
+            "Cleaned model must be consistent"
+        );
         // Pin 1 dot must be preserved
         let geom = Geometry::new(&cleaned_model);
         let pieces = geom.pieces();

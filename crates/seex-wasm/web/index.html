@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SeEx WebAssembly - 纯浏览器端 3D STEP 去标与 EDA 命名引擎</title>
+    <style>
+        :root {
+            --bg-body: #0d1117;
+            --bg-card: #161b22;
+            --border: #30363d;
+            --primary: #2f81f7;
+            --primary-hover: #58a6ff;
+            --text-main: #f0f6fc;
+            --text-muted: #8b949e;
+            --success: #238636;
+            --warning: #d29922;
+            --danger: #f85149;
+            --radius: 8px;
+            --shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        body.light {
+            --bg-body: #f6f8fa;
+            --bg-card: #ffffff;
+            --border: #d0d7de;
+            --primary: #0969da;
+            --primary-hover: #218bff;
+            --text-main: #1f2328;
+            --text-muted: #656d76;
+            --success: #1a7f37;
+            --warning: #9a6700;
+            --danger: #cf222e;
+            --shadow: 0 8px 24px rgba(140,149,159,0.2);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            transition: background-color 0.2s, color 0.2s;
+        }
+        header {
+            background-color: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .logo-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .logo-badge {
+            background: linear-gradient(135deg, #1f6feb, #238636);
+            color: #fff;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+        }
+        .title { font-size: 17px; font-weight: 600; }
+        .theme-toggle {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 6px 12px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.15s;
+        }
+        .theme-toggle:hover { background: rgba(127,127,127,0.1); }
+        .container {
+            max-width: 960px;
+            margin: 28px auto;
+            padding: 0 16px;
+            width: 100%;
+            flex: 1;
+        }
+        .hero {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: var(--shadow);
+            position: relative;
+            overflow: hidden;
+        }
+        .hero h1 { font-size: 22px; margin-bottom: 8px; }
+        .hero p { color: var(--text-muted); font-size: 14px; line-height: 1.6; }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-top: 12px;
+            background: rgba(35, 134, 54, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(35, 134, 54, 0.3);
+        }
+        .status-pill.loading {
+            background: rgba(210, 153, 34, 0.15);
+            color: var(--warning);
+            border-color: rgba(210, 153, 34, 0.3);
+        }
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.15s;
+        }
+        .tab-btn.active {
+            color: #fff;
+            background: var(--primary);
+        }
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card h2 { font-size: 17px; margin-bottom: 12px; }
+        .dropzone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 36px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background-color 0.2s;
+            margin-bottom: 20px;
+        }
+        .dropzone:hover, .dropzone.dragover {
+            border-color: var(--primary);
+            background-color: rgba(47, 129, 247, 0.05);
+        }
+        .dropzone svg {
+            width: 44px;
+            height: 44px;
+            fill: var(--text-muted);
+            margin-bottom: 12px;
+        }
+        .radio-group {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .radio-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            margin-bottom: 16px;
+            line-height: 1.5;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        .alert-info { background: rgba(47, 129, 247, 0.1); border: 1px solid rgba(47, 129, 247, 0.3); color: var(--text-main); }
+        .alert-warning { background: rgba(210, 153, 34, 0.1); border: 1px solid rgba(210, 153, 34, 0.3); color: var(--text-main); }
+        .btn-primary {
+            background-color: var(--primary);
+            color: #fff;
+            border: none;
+            padding: 10px 24px;
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s;
+        }
+        .btn-primary:hover:not(:disabled) { background-color: var(--primary-hover); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .stat-box {
+            background: rgba(127,127,127,0.06);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-value { font-size: 20px; font-weight: 700; color: var(--primary); margin-top: 4px; }
+        .stat-label { font-size: 12px; color: var(--text-muted); }
+        input[type="text"] {
+            width: 100%;
+            background: var(--bg-body);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 10px 14px;
+            border-radius: var(--radius);
+            font-size: 14px;
+            outline: none;
+            margin-bottom: 12px;
+        }
+        input[type="text"]:focus { border-color: var(--primary); }
+        .result-box {
+            background: var(--bg-body);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px 16px;
+            font-family: monospace;
+            font-size: 13px;
+            margin-top: 10px;
+            word-break: break-all;
+        }
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-muted);
+            font-size: 12px;
+            border-top: 1px solid var(--border);
+            margin-top: auto;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-group">
+            <span class="logo-badge">WASM 3.0</span>
+            <span class="title">SeEx WebAssembly Client Engine</span>
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()">🌓 切换主题</button>
+    </header>
+
+    <div class="container">
+        <div class="hero">
+            <h1>🚀 纯前端 WebAssembly 离线引擎</h1>
+            <p>基于 Rust 2024 原生编译为 WebAssembly（`.wasm`）。所有 3D 模型清洗与名称规格化逻辑均 100% 在您当前的浏览器本地多线程/JIT 内核中完成，无需向任何服务器上传文件，零网络开销、毫秒级执行、极致隐私安全！</p>
+            <div id="wasmStatus" class="status-pill loading">
+                <span>⚙️ 正在加载 WebAssembly 模块 (seex_wasm.wasm)...</span>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('cleanTab')">3D STEP 模型在线清洗</button>
+            <button class="tab-btn" onclick="switchTab('namingTab')">EDA 封装与模型名称还原</button>
+        </div>
+
+        <!-- 3D STEP Cleaner Tab -->
+        <div id="cleanTab" class="card">
+            <h2>3D STEP 几何清洗与去标</h2>
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                拖拽上传任意嘉立创/EasyEDA 或其它第三方 `.step` 模型，WASM 引擎将在浏览器内存中高速重建拓扑并剥离冗余丝印。
+            </p>
+
+            <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+                <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+                <div style="font-weight:600; font-size:15px;" id="dropzoneLabel">点击选择或将 .step 文件拖拽至此</div>
+                <div style="font-size:12px; color:var(--text-muted); margin-top:6px;" id="fileInfo">支持任意大小 STEP 文件，本地内存安全计算</div>
+                <input type="file" id="fileInput" accept=".step,.stp" style="display:none" onchange="onFileSelected(event)">
+            </div>
+
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="cleanMode" value="0" checked onchange="onModeChange()">
+                    <span><strong>仅去除嘉立创 Logo (推荐)</strong> — 兼容复杂板级装配体</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="cleanMode" value="1" onchange="onModeChange()">
+                    <span><strong>去除所有丝印与型号标记</strong> — 包含 Pin 1 极性圆点保护</span>
+                </label>
+            </div>
+
+            <div id="modeAlert" class="alert alert-info">
+                <span>ℹ️ <strong>Logo Only 模式</strong>：精准识别并仅剥离“LCEDA / EasyEDA”立体文字与图标，对复杂板级复合 STEP 模型 100% 安全。</span>
+            </div>
+
+            <button id="btnClean" class="btn-primary" disabled onclick="executeCleanStep()">
+                <span>⚡ 开始本地 WebAssembly 清洗并下载</span>
+            </button>
+
+            <div id="statsSection" style="display:none;">
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-label">移除标记数</div>
+                        <div class="stat-value" id="statLogos">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">碎片实体数</div>
+                        <div class="stat-value" id="statPieces">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">几何拓扑面</div>
+                        <div class="stat-value" id="statFaces">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">计算耗时</div>
+                        <div class="stat-value" id="statDuration">0 ms</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Naming Converter Tab -->
+        <div id="namingTab" class="card" style="display:none;">
+            <h2>EDA 封装与模型名称还原测试</h2>
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                测试基于正则与尺寸规格的命名自动还原（剥离 `_C\d+` 物料后缀，并在数字尺寸间将 `_` 还原为小数点 `.`）。
+            </p>
+
+            <label style="font-size:13px; font-weight:600; display:block; margin-bottom:6px;">输入带批次物料后缀的名称：</label>
+            <input type="text" id="nameInput" value="C0603_L1_6-W0_8-H0_8_C999" oninput="runNameConversion()">
+
+            <div style="margin-bottom:14px;">
+                <label class="radio-label">
+                    <input type="checkbox" id="chkReplaceDot" checked onchange="runNameConversion()">
+                    <span>数字尺寸下划线还原为小数点 (例: 1_6 &rarr; 1.6)</span>
+                </label>
+            </div>
+
+            <div style="font-size:13px; font-weight:600; margin-top:12px;">标准干净封装名称 (Footprint Name)：</div>
+            <div class="result-box" id="resFootprint">...</div>
+
+            <div style="font-size:13px; font-weight:600; margin-top:12px;">标准 3D 模型文件名 (STEP Model Filename)：</div>
+            <div class="result-box" id="resStep">...</div>
+        </div>
+    </div>
+
+    <footer>
+        SeEx WebAssembly Browser Engine • Pure Rust 2024 to wasm32-unknown-unknown • 零依赖离线可用
+    </footer>
+
+    <script type="module">
+        import { initSeex, cleanStep, restoreFootprintName, restoreStepModelName, getVersion } from './seex.js';
+
+        let wasmReady = false;
+        let selectedFile = null;
+
+        window.addEventListener('DOMContentLoaded', async () => {
+            const statusEl = document.getElementById('wasmStatus');
+            try {
+                await initSeex('seex_wasm.wasm');
+                wasmReady = true;
+                const ver = getVersion();
+                statusEl.className = 'status-pill';
+                statusEl.innerHTML = `✓ WebAssembly 引擎就绪 (v${ver}) • 纯客户端零服务器模式`;
+                runNameConversion();
+            } catch (err) {
+                statusEl.className = 'status-pill';
+                statusEl.style.borderColor = 'var(--danger)';
+                statusEl.style.color = 'var(--danger)';
+                statusEl.innerHTML = `✕ WASM 加载失败: ${err.message} (如从本地 file:// 协议打开，浏览器通常阻止 fetch，请使用任意静态 HTTP 服务器或 Edge/Chrome 扩展)`;
+            }
+        });
+
+        window.onFileSelected = function(e) {
+            const files = e.target.files;
+            if (files && files.length > 0) {
+                setFile(files[0]);
+            }
+        };
+
+        const dropzone = document.getElementById('dropzone');
+        dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+        dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                setFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        function setFile(file) {
+            selectedFile = file;
+            document.getElementById('dropzoneLabel').innerText = `已加载: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+            document.getElementById('fileInfo').innerText = '文件已就绪，点击下方按钮由本地 WebAssembly 内核立即清洗';
+            document.getElementById('btnClean').disabled = !wasmReady;
+        }
+
+        window.onModeChange = function() {
+            const mode = document.querySelector('input[name="cleanMode"]:checked').value;
+            const alertEl = document.getElementById('modeAlert');
+            if (mode === '1') {
+                alertEl.className = 'alert alert-warning';
+                alertEl.innerHTML = '⚠️ <strong>All Markings 模式</strong>：将清除所有文字与丝印特征（Pin 1 极性圆点提供保留保护）。注意：请勿对多个元件组成的复杂板级装配体开启此选项，避免误伤其他部件。';
+            } else {
+                alertEl.className = 'alert alert-info';
+                alertEl.innerHTML = 'ℹ️ <strong>Logo Only 模式</strong>：精准识别并仅剥离“LCEDA / EasyEDA”立体文字与图标，对复杂板级复合 STEP 模型 100% 安全。';
+            }
+        };
+
+        window.executeCleanStep = async function() {
+            if (!selectedFile || !wasmReady) return;
+
+            const btn = document.getElementById('btnClean');
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳ 本地 WebAssembly 高速处理中...</span>';
+
+            try {
+                const arrayBuffer = await selectedFile.arrayBuffer();
+                const mode = parseInt(document.querySelector('input[name="cleanMode"]:checked').value, 10);
+                const allMarkings = mode === 1;
+
+                // Call Rust WebAssembly
+                const result = cleanStep(new Uint8Array(arrayBuffer), { allMarkings });
+
+                // Update UI Stats
+                document.getElementById('statsSection').style.display = 'block';
+                document.getElementById('statLogos').innerText = result.logosRemoved;
+                document.getElementById('statPieces').innerText = result.piecesRemoved;
+                document.getElementById('statFaces').innerText = result.facesRemoved;
+                document.getElementById('statDuration').innerText = `${result.durationMs} ms`;
+
+                // Trigger instant browser download
+                const blob = new Blob([result.cleanedBytes], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = `cleaned_${selectedFile.name}`;
+                document.body.appendChild(a);
+                a.click();
+                URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡ 清洗完成并已下载！点击可再次处理</span>';
+            } catch (err) {
+                alert('清洗失败: ' + err.message);
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡ 开始本地 WebAssembly 清洗并下载</span>';
+            }
+        };
+
+        window.runNameConversion = function() {
+            if (!wasmReady) return;
+            const input = document.getElementById('nameInput').value;
+            const replaceDot = document.getElementById('chkReplaceDot').checked;
+
+            const fp = restoreFootprintName(input, replaceDot);
+            const step = restoreStepModelName(input, replaceDot);
+
+            document.getElementById('resFootprint').innerText = fp;
+            document.getElementById('resStep').innerText = step;
+        };
+
+        window.switchTab = function(tabId) {
+            document.getElementById('cleanTab').style.display = tabId === 'cleanTab' ? 'block' : 'none';
+            document.getElementById('namingTab').style.display = tabId === 'namingTab' ? 'block' : 'none';
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+        };
+
+        window.toggleTheme = function() {
+            document.body.classList.toggle('light');
+        };
+    </script>
+</body>
+</html>
+

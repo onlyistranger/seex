@@ -12,9 +12,7 @@ use tokio::task::JoinSet;
 use crate::easyeda::{ComponentData, EasyedaApi};
 use crate::error::{AppError, EasyedaError, Result};
 use crate::kicad::converter::{make_suffixed_name, restore_footprint_name};
-use crate::kicad::datasheet::{
-    DatasheetExportStatus, datasheet_client, download_datasheet_pdf,
-};
+use crate::kicad::datasheet::{DatasheetExportStatus, datasheet_client, download_datasheet_pdf};
 use crate::kicad::{
     KicadExportOptions, KicadLibraryOptions, LibraryManager, ModelExportStatus, ModelStageStatus,
     convert_3d_model, convert_footprint, convert_symbol,
@@ -993,7 +991,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_kicad_batch_without_datasheet() {
-        let root = std::env::temp_dir().join(format!("test_kicad_batch_nodoc_{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("test_kicad_batch_nodoc_{}", std::process::id()));
         let options = KicadBatchOptions {
             ids: vec!["C77978".to_string()], // 1N4148W-TP
             library: KicadLibraryOptions {
@@ -1027,15 +1026,21 @@ mod tests {
         assert_eq!(summary.success, 1);
         assert_eq!(summary.datasheets.downloaded, 0);
 
-        let doc_file = root.join("test_lib_nodoc.doc").join("1N4148W-TP_C77978.pdf");
-        assert!(!doc_file.exists(), "Datasheet file should not exist when download_pdf is false");
+        let doc_file = root
+            .join("test_lib_nodoc.doc")
+            .join("1N4148W-TP_C77978.pdf");
+        assert!(
+            !doc_file.exists(),
+            "Datasheet file should not exist when download_pdf is false"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
     async fn test_export_kicad_batch_without_suffix() {
-        let root = std::env::temp_dir().join(format!("test_kicad_batch_nosuf_{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("test_kicad_batch_nosuf_{}", std::process::id()));
         let options = KicadBatchOptions {
             ids: vec!["C77978".to_string()], // 1N4148W-TP
             library: KicadLibraryOptions {
@@ -1072,14 +1077,20 @@ mod tests {
         let doc_dir = root.join("test_lib_nosuf.doc");
         if summary.datasheets.downloaded > 0 {
             let doc_file = doc_dir.join("1N4148W-TP.pdf");
-            assert!(doc_file.exists(), "Datasheet file should have clean name when add_suffix is false");
+            assert!(
+                doc_file.exists(),
+                "Datasheet file should have clean name when add_suffix is false"
+            );
         }
         if doc_dir.is_dir() {
             let entries: Vec<_> = fs::read_dir(&doc_dir)
                 .unwrap()
                 .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
                 .collect();
-            assert!(!entries.iter().any(|name| name.contains("_C77978")), "No suffixed doc should exist");
+            assert!(
+                !entries.iter().any(|name| name.contains("_C77978")),
+                "No suffixed doc should exist"
+            );
         }
 
         // Check symbol references clean footprint
@@ -1093,7 +1104,10 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert!(!entries.iter().any(|name| name.contains("_C77978")), "No suffixed footprint should exist");
+        assert!(
+            !entries.iter().any(|name| name.contains("_C77978")),
+            "No suffixed footprint should exist"
+        );
 
         // Check 3D model directory only has clean 3D model
         let model_dir = root.join("test_lib_nosuf.3dshapes");
@@ -1102,7 +1116,10 @@ mod tests {
                 .unwrap()
                 .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
                 .collect();
-            assert!(!entries.iter().any(|name| name.contains("_C77978")), "No suffixed 3D model should exist");
+            assert!(
+                !entries.iter().any(|name| name.contains("_C77978")),
+                "No suffixed 3D model should exist"
+            );
         }
 
         let _ = fs::remove_dir_all(root);
@@ -1110,7 +1127,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_kicad_batch_with_preserve_package() {
-        let root = std::env::temp_dir().join(format!("test_kicad_batch_pkg_{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("test_kicad_batch_pkg_{}", std::process::id()));
         let options = KicadBatchOptions {
             ids: vec!["C6186".to_string()], // AMS1117-3.3 in SOT-223
             library: KicadLibraryOptions {
@@ -1152,8 +1170,16 @@ mod tests {
             .collect();
 
         // Must have package footprint files: SOT-223_C6186 and SOT-223
-        assert!(entries.contains(&"SOT-223_C6186.kicad_mod".to_string()), "Must export SOT-223_C6186.kicad_mod, entries: {:?}", entries);
-        assert!(entries.contains(&"SOT-223.kicad_mod".to_string()), "Must export SOT-223.kicad_mod, entries: {:?}", entries);
+        assert!(
+            entries.contains(&"SOT-223_C6186.kicad_mod".to_string()),
+            "Must export SOT-223_C6186.kicad_mod, entries: {:?}",
+            entries
+        );
+        assert!(
+            entries.contains(&"SOT-223.kicad_mod".to_string()),
+            "Must export SOT-223.kicad_mod, entries: {:?}",
+            entries
+        );
         // Must also have standard title footprint files
         assert!(entries.contains(&"AMS1117-3.3_C6186.kicad_mod".to_string()));
         assert!(entries.contains(&"AMS1117-3.3.kicad_mod".to_string()));
@@ -1164,8 +1190,16 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert!(m_entries.contains(&"SOT-223_C6186.step".to_string()), "Must export SOT-223_C6186.step, entries: {:?}", m_entries);
-        assert!(m_entries.contains(&"SOT-223.step".to_string()), "Must export SOT-223.step, entries: {:?}", m_entries);
+        assert!(
+            m_entries.contains(&"SOT-223_C6186.step".to_string()),
+            "Must export SOT-223_C6186.step, entries: {:?}",
+            m_entries
+        );
+        assert!(
+            m_entries.contains(&"SOT-223.step".to_string()),
+            "Must export SOT-223.step, entries: {:?}",
+            m_entries
+        );
 
         let _ = fs::remove_dir_all(root);
     }

@@ -359,7 +359,9 @@ impl ModelCleanup {
             }
             (_, outcome) => {
                 if outcome.logo_remains() {
-                    log::warn!("{part}: the 3D model logo/markings could not be removed ({outcome:?})");
+                    log::warn!(
+                        "{part}: the 3D model logo/markings could not be removed ({outcome:?})"
+                    );
                     if let Ok(mut parts) = self.with_logo.lock()
                         && !parts.iter().any(|known| known == part)
                     {

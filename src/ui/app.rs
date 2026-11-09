@@ -123,7 +123,11 @@ pub enum FileDialogKind {
 }
 
 pub enum StepCleanProgressMsg {
-    Progress { current: usize, total: usize, log: String },
+    Progress {
+        current: usize,
+        total: usize,
+        log: String,
+    },
     Finished(crate::step_cleaner::CleanStepSummary),
     Error(String),
 }
@@ -968,10 +972,7 @@ impl SeexUi {
         let input = PathBuf::from(self.step_clean_input.trim());
         let output = PathBuf::from(self.step_clean_output.trim());
         if !input.exists() {
-            self.show_toast_error(locale::t(
-                "Input path does not exist",
-                "源路径不存在",
-            ));
+            self.show_toast_error(locale::t("Input path does not exist", "源路径不存在"));
             return;
         }
 
@@ -1000,13 +1001,24 @@ impl SeexUi {
             let summary = crate::step_cleaner::clean_step(&options, |curr, total, item| {
                 let status = match item.outcome {
                     crate::step_logo::LogoOutcome::Removed(rem) => {
-                        format!("✓ 去除成功 (移除 {} 处标记, {} 碎片, {} 几何面)", rem.logos, rem.pieces, rem.faces)
+                        format!(
+                            "✓ 去除成功 (移除 {} 处标记, {} 碎片, {} 几何面)",
+                            rem.logos, rem.pieces, rem.faces
+                        )
                     }
                     crate::step_logo::LogoOutcome::NotFound => "○ 无标记 (原样保存)".to_string(),
-                    crate::step_logo::LogoOutcome::Kept => "⚠ 检测到标记但流形/极点保护保留".to_string(),
-                    crate::step_logo::LogoOutcome::Unreadable => "✗ 无法解析的 STEP 模型".to_string(),
+                    crate::step_logo::LogoOutcome::Kept => {
+                        "⚠ 检测到标记但流形/极点保护保留".to_string()
+                    }
+                    crate::step_logo::LogoOutcome::Unreadable => {
+                        "✗ 无法解析的 STEP 模型".to_string()
+                    }
                 };
-                let name = item.src_path.file_name().unwrap_or_default().to_string_lossy();
+                let name = item
+                    .src_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
                 let log = if let Some(err) = &item.error {
                     format!("[{curr}/{total}] {name}: 错误: {err}")
                 } else {
@@ -1032,7 +1044,11 @@ impl SeexUi {
         }
         for msg in messages {
             match msg {
-                StepCleanProgressMsg::Progress { current, total, log } => {
+                StepCleanProgressMsg::Progress {
+                    current,
+                    total,
+                    log,
+                } => {
                     self.step_clean_progress = (current, total);
                     self.step_clean_logs.push(log);
                     if self.step_clean_logs.len() > 1000 {

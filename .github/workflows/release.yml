@@ -213,10 +213,54 @@ jobs:
           name: seex-${{ inputs.tag }}-${{ matrix.asset_suffix }}
           path: ${{ env.ASSETS }}
 
+  build-wasm:
+    name: build WebAssembly browser release
+    runs-on: ubuntu-26.04
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Install Rust toolchain with wasm32 target
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build release WebAssembly
+        run: cargo build --release --manifest-path crates/seex-wasm/Cargo.toml --target wasm32-unknown-unknown
+
+      - name: Package WebAssembly release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="seex-${RELEASE_TAG}-wasm-web"
+          mkdir -p "dist/$name"
+          cp crates/seex-wasm/target/wasm32-unknown-unknown/release/seex_wasm.wasm "dist/$name/"
+          cp crates/seex-wasm/web/seex.js "dist/$name/"
+          cp crates/seex-wasm/web/index.html "dist/$name/"
+          cat << 'EOF' > "dist/$name/README.md"
+          # SeEx WebAssembly Browser Package
+
+          This package runs 100% in any modern browser without a backend server.
+          Serve this directory with any static HTTP server (e.g. `npx serve` or `python -m http.server`).
+          EOF
+          asset="$name.zip"
+          (cd dist && zip -r "../$asset" "$name")
+          echo "ASSETS=$asset" >> "$GITHUB_ENV"
+
+      - name: Upload wasm artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: seex-${{ inputs.tag }}-wasm-web
+          path: ${{ env.ASSETS }}
+
   publish:
     name: publish GitHub release
     runs-on: ubuntu-26.04
-    needs: [build, build-linux-distro]
+    needs: [build, build-linux-distro, build-wasm]
     steps:
       - name: Check out release notes
         uses: actions/checkout@v7
