@@ -1,0 +1,57 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches:
+      - master
+      - mod
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm32 target
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build WebAssembly (seex-wasm)
+        run: cargo build --release --manifest-path crates/seex-wasm/Cargo.toml --target wasm32-unknown-unknown
+
+      - name: Prepare Pages Artifacts
+        run: |
+          mkdir -p dist/wasm
+          cp crates/seex-wasm/target/wasm32-unknown-unknown/release/seex_wasm.wasm dist/wasm/
+          cp crates/seex-wasm/web/seex.js dist/wasm/
+          cp crates/seex-wasm/web/index.html dist/wasm/
+          touch dist/wasm/.nojekyll
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/wasm
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
